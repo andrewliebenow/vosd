@@ -1,0 +1,14 @@
+[package]
+name = "vosd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+gtk = "0.17.1"
+gtk-layer-shell = "0.6.1"
+serde_json = "1.0.104"
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true

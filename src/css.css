@@ -1,0 +1,37 @@
+progress {
+    background-color: #ffffff;
+    border: none;
+    min-height: inherit;
+}
+
+progressbar {
+    border: none;
+    min-height: 10px;
+}
+
+trough {
+    background-color: #777777;
+    border: none;
+    min-height: inherit;
+}
+
+window {
+    border-radius: 4px;
+    padding: 12px 20px;
+}
+
+.box {
+    margin: 10px;
+}
+
+.percentageLabel {
+    min-width: 36px;
+}
+
+.percentageLabel-inactive {
+    text-decoration: line-through;
+}
+
+.progressBar-inactive {
+    opacity: 0.5;
+}
