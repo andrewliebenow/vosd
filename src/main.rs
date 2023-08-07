@@ -165,7 +165,7 @@ fn main() {
                                 }
                             } else {
                                 // TODO
-                                eprintln!("Jumbled event order detected");
+                                // eprintln!("Jumbled event order detected");
                             }
 
                             reading_client_number = None;
@@ -179,10 +179,7 @@ fn main() {
                         }
                     }
                     _ => {
-                        // eprintln!(
-                        //     "Unexpected line encountered:\n===>\n{line}\n<===\n",
-                        //     line = line
-                        // );
+                        // eprintln!("Unexpected line encountered:\n===>\n{}\n<===\n", line);
                     }
                 }
             }
@@ -282,6 +279,9 @@ fn gather_pactl_data() -> PactlData {
     let volume = if hash_set.len() == 1 {
         hash_set.iter().next().unwrap().to_owned().into()
     } else {
+        // TODO
+        // eprintln!("hash_set.len() is not 1:\n===>\n{}\n<===\n", value);
+
         None
     };
 
@@ -311,6 +311,7 @@ fn create_image(icon_name: &str) -> gtk::Image {
     gtk::Image::from_icon_name(icon_name.into(), gtk::IconSize::Dnd)
 }
 
+// TODO Reuse widgets instead of removing
 fn show_volume_change_notification(vosd_window: &VosdWindow, pactl_data: &PactlData) {
     let application_window = &vosd_window.application_window;
     let boxz = &vosd_window.boxz;
@@ -338,10 +339,7 @@ fn show_volume_change_notification(vosd_window: &VosdWindow, pactl_data: &PactlD
                 _ => panic!(),
             };
 
-            let icon_name = format!(
-                "audio-volume-{icon_segment}-symbolic",
-                icon_segment = icon_segment
-            );
+            let icon_name = format!("audio-volume-{}-symbolic", icon_segment);
 
             let image = create_image(&icon_name);
 
@@ -383,24 +381,25 @@ fn show_volume_change_notification(vosd_window: &VosdWindow, pactl_data: &PactlD
     /* #endregion */
 
     /* #region Timeout logic */
-    // Cancel timeout
-    if let Some(so) = timeout.take() {
-        so.remove()
-    }
-
     {
         let application_window = application_window.clone();
 
         // Cannot shadow "timeout"
         let timeout_clone = timeout.clone();
 
-        timeout.replace(
+        let option = timeout.replace(
             (glib::timeout_add_local_once(Duration::from_millis(2_000), move || {
-                application_window.hide();
                 timeout_clone.replace(None);
+
+                application_window.hide();
             }))
             .into(),
         );
+
+        // Cancel previous timeout
+        if let Some(so) = option {
+            so.remove();
+        }
     }
     /* #endregion */
 
