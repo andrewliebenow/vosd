@@ -1,9 +1,7 @@
 // https://github.com/ErikReider/SwayOSD
 
-// TODO RefCell
-
 use std::{
-    cell::RefCell,
+    cell::Cell,
     collections::HashSet,
     io::{BufRead, BufReader},
     process::{Command, Stdio},
@@ -21,28 +19,13 @@ use gtk::{
     },
 };
 
-const CHANGE_ON_SINK_NUMBER: &str = "change' on sink #";
-
-const CHANGE_ON_SINK_NUMBER_LEN: usize = CHANGE_ON_SINK_NUMBER.len();
-
-const EVENT_SPACE: &str = "Event '";
-
-const EVENT_SPACE_LEN: usize = EVENT_SPACE.len();
-
 const MUTED: &str = "muted";
-
-const NEW_ON_CLIENT_NUMBER: &str = "new' on client #";
-
-const NEW_ON_CLIENT_NUMBER_LEN: usize = NEW_ON_CLIENT_NUMBER.len();
-
-const REMOVE_ON_CLIENT_NUMBER: &str = "remove' on client #";
-
-const REMOVE_ON_CLIENT_NUMBER_LEN: usize = REMOVE_ON_CLIENT_NUMBER.len();
+const TEN_MILLISECONDS_DURATION: Duration = Duration::from_millis(10);
 
 struct VosdWindow {
-    application_window: gtk::ApplicationWindow,
+    application_window: Rc<gtk::ApplicationWindow>,
     boxz: gtk::Box,
-    timeout: Rc<RefCell<Option<glib::SourceId>>>,
+    timeout: Rc<Cell<Option<glib::SourceId>>>,
 }
 
 struct PactlData {
@@ -76,7 +59,7 @@ fn main() {
         gtk::gio::ApplicationFlags::FLAGS_NONE,
     );
 
-    let vosd_windows = Rc::new(RefCell::new(Vec::new()));
+    let vosd_windows = Rc::new(Cell::new(Vec::new()));
 
     application.connect_activate(move |ap| {
         let display = match gdk::Display::default() {
@@ -87,8 +70,8 @@ fn main() {
         initialize_windows(&vosd_windows, ap, &display);
 
         {
-            let ap = ap.clone();
-            let vosd_windows = vosd_windows.clone();
+            let ap = ap.to_owned();
+            let vosd_windows = vosd_windows.to_owned();
 
             display.connect_opened(move |di| {
                 initialize_windows(&vosd_windows, &ap, di);
@@ -96,7 +79,7 @@ fn main() {
         }
 
         {
-            let vosd_windows = vosd_windows.clone();
+            let vosd_windows = vosd_windows.to_owned();
 
             display.connect_closed(move |_, _| {
                 close_all_windows(&vosd_windows);
@@ -104,8 +87,8 @@ fn main() {
         }
 
         {
-            let ap = ap.clone();
-            let vosd_windows = vosd_windows.clone();
+            let ap = ap.to_owned();
+            let vosd_windows = vosd_windows.to_owned();
 
             display.connect_monitor_added(move |_, mo| {
                 add_window(&vosd_windows, &ap, mo);
@@ -113,85 +96,62 @@ fn main() {
         }
 
         {
-            let ap = ap.clone();
-            let vosd_windows = vosd_windows.clone();
+            let ap = ap.to_owned();
+            let vosd_windows = vosd_windows.to_owned();
 
             display.connect_monitor_removed(move |di, _| {
                 initialize_windows(&vosd_windows, &ap, di);
             });
         }
 
-        let index_string = {
-            let pactl_data = gather_pactl_data();
-
-            pactl_data.index.to_string()
-        };
-
         let (sender, receiver) = glib::MainContext::channel::<PactlData>(glib::PRIORITY_DEFAULT);
 
-        thread::spawn(move || {
-            let child = Command::new("pactl")
+        thread::spawn(move || loop {
+            let listen_for_string = {
+                let pactl_data = gather_pactl_data();
+
+                format!("Event 'change' on sink #{}", pactl_data.index)
+            };
+
+            let mut child = Command::new("pactl")
                 .arg("subscribe")
                 .stdout(Stdio::piped())
                 .spawn()
                 .unwrap();
 
-            let buf_reader = BufReader::new(child.stdout.unwrap());
-
-            let mut reading_client_number = None;
-            let mut send_notification = false;
+            let buf_reader = BufReader::new(child.stdout.take().unwrap());
 
             for re in buf_reader.lines() {
                 let line = re.unwrap();
 
-                let line_without_event_space = &line[EVENT_SPACE_LEN..];
+                if line == listen_for_string {
+                    println!("Sending notification");
 
-                match line_without_event_space {
-                    st if st.starts_with(NEW_ON_CLIENT_NUMBER) => {
-                        reading_client_number = st[NEW_ON_CLIENT_NUMBER_LEN..].to_owned().into();
-                        send_notification = false;
-                    }
-                    st if st.starts_with(REMOVE_ON_CLIENT_NUMBER) => {
-                        if let Some(str) = reading_client_number {
-                            let client_number = &st[REMOVE_ON_CLIENT_NUMBER_LEN..];
+                    let pactl_data = gather_pactl_data();
 
-                            if client_number == str {
-                                if send_notification {
-                                    let pactl_data = gather_pactl_data();
-
-                                    sender.send(pactl_data).unwrap();
-
-                                    send_notification = false;
-                                }
-                            } else {
-                                // TODO
-                                // eprintln!("Jumbled event order detected");
-                            }
-
-                            reading_client_number = None;
-                        }
-                    }
-                    st if st.starts_with(CHANGE_ON_SINK_NUMBER) => {
-                        let sink_number = &st[CHANGE_ON_SINK_NUMBER_LEN..];
-
-                        if sink_number == index_string {
-                            send_notification = true;
-                        }
-                    }
-                    _ => {
-                        // eprintln!("Unexpected line encountered:\n===>\n{}\n<===\n", line);
-                    }
+                    sender.send(pactl_data).unwrap();
                 }
             }
+
+            let result = child.wait();
+
+            eprintln!(
+                "\"pactl subscribe\" process ended, starting another one:\n===>\n{:?}\n<===",
+                result
+            );
         });
 
         {
-            let vosd_windows = vosd_windows.clone();
+            let vosd_windows = vosd_windows.to_owned();
 
             receiver.attach(None, move |pa| {
-                for vo in vosd_windows.borrow().iter() {
+                let vec = vosd_windows.take();
+
+                for vo in &vec {
                     show_volume_change_notification(vo, &pa);
                 }
+
+                vosd_windows.replace(vec);
 
                 gtk::prelude::Continue(true)
             });
@@ -202,17 +162,21 @@ fn main() {
 }
 
 fn add_window(
-    vosd_windows: &Rc<RefCell<Vec<VosdWindow>>>,
+    vosd_windows: &Rc<Cell<Vec<VosdWindow>>>,
     application: &gtk::Application,
     monitor: &gdk::Monitor,
 ) {
     let vosd_window = VosdWindow::new(application, monitor);
 
-    vosd_windows.borrow_mut().push(vosd_window);
+    let mut vec = vosd_windows.take();
+
+    vec.push(vosd_window);
+
+    vosd_windows.replace(vec);
 }
 
 fn initialize_windows(
-    vosd_windows: &Rc<RefCell<Vec<VosdWindow>>>,
+    vosd_windows: &Rc<Cell<Vec<VosdWindow>>>,
     application: &gtk::Application,
     display: &gdk::Display,
 ) {
@@ -228,69 +192,76 @@ fn initialize_windows(
     }
 }
 
-fn close_all_windows(vosd_windows: &Rc<RefCell<Vec<VosdWindow>>>) {
-    vosd_windows.borrow_mut().retain(|vo| {
+fn close_all_windows(vosd_windows: &Rc<Cell<Vec<VosdWindow>>>) {
+    for vo in vosd_windows.take() {
         vo.application_window.close();
-
-        false
-    });
+    }
 }
 
 fn gather_pactl_data() -> PactlData {
-    let child = Command::new("pactl")
-        .args(["--format=json", "list", "sinks"])
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
+    for i in 0..1_000 {
+        let child = Command::new("pactl")
+            .args(["--format=json", "list", "sinks"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
 
-    let value: serde_json::Value = serde_json::from_reader(child.stdout.unwrap()).unwrap();
+        let value: serde_json::Value = serde_json::from_reader(child.stdout.unwrap()).unwrap();
 
-    let array = value.as_array().unwrap();
+        let array = value.as_array().unwrap();
 
-    let first_element_object = array.get(0).unwrap().as_object().unwrap();
+        if array.is_empty() {
+            eprintln!("array is empty (attempt {})", i + 1);
 
-    let index = first_element_object.get("index").unwrap().as_u64().unwrap();
+            thread::sleep(TEN_MILLISECONDS_DURATION);
 
-    let base_volume_object = first_element_object
-        .get("base_volume")
-        .unwrap()
-        .as_object()
-        .unwrap();
+            continue;
+        }
 
-    let mute = first_element_object.get("mute").unwrap().as_bool().unwrap();
+        let first_element_object = array.get(0).unwrap().as_object().unwrap();
 
-    let base_volume = base_volume_object.get("value").unwrap().as_u64().unwrap();
+        let index = first_element_object.get("index").unwrap().as_u64().unwrap();
 
-    let volume_object = first_element_object
-        .get("volume")
-        .unwrap()
-        .as_object()
-        .unwrap();
+        let base_volume_object = first_element_object
+            .get("base_volume")
+            .unwrap()
+            .as_object()
+            .unwrap();
 
-    let hash_set = volume_object
-        .iter()
-        .map(|(_, va)| {
-            let ma = va.as_object().unwrap();
+        let mute = first_element_object.get("mute").unwrap().as_bool().unwrap();
 
-            ma.get("value").unwrap().as_u64().unwrap()
-        })
-        .collect::<HashSet<u64>>();
+        let base_volume = base_volume_object.get("value").unwrap().as_u64().unwrap();
 
-    let volume = if hash_set.len() == 1 {
-        hash_set.iter().next().unwrap().to_owned().into()
-    } else {
-        // TODO
-        // eprintln!("hash_set.len() is not 1:\n===>\n{}\n<===\n", value);
+        let volume_object = first_element_object
+            .get("volume")
+            .unwrap()
+            .as_object()
+            .unwrap();
 
-        None
-    };
+        let hash_set = volume_object
+            .iter()
+            .map(|(_, va)| {
+                let ma = va.as_object().unwrap();
 
-    PactlData {
-        index,
-        base_volume,
-        mute,
-        volume,
+                ma.get("value").unwrap().as_u64().unwrap()
+            })
+            .collect::<HashSet<u64>>();
+
+        let volume = if hash_set.len() == 1 {
+            hash_set.iter().next().unwrap().to_owned().into()
+        } else {
+            None
+        };
+
+        return PactlData {
+            index,
+            base_volume,
+            mute,
+            volume,
+        };
     }
+
+    panic!("Could not list sinks");
 }
 
 fn create_progress_bar(fraction: f64, apply_inactive_class: bool) -> gtk::ProgressBar {
@@ -313,9 +284,11 @@ fn create_image(icon_name: &str) -> gtk::Image {
 
 // TODO Reuse widgets instead of removing
 fn show_volume_change_notification(vosd_window: &VosdWindow, pactl_data: &PactlData) {
-    let application_window = &vosd_window.application_window;
-    let boxz = &vosd_window.boxz;
-    let timeout = &vosd_window.timeout;
+    let VosdWindow {
+        application_window,
+        boxz,
+        timeout,
+    } = vosd_window;
 
     /* #region Delete existing widgets */
     for wi in boxz.children() {
@@ -381,25 +354,25 @@ fn show_volume_change_notification(vosd_window: &VosdWindow, pactl_data: &PactlD
     /* #endregion */
 
     /* #region Timeout logic */
+    // Cancel previous timeout
+    if let Some(so) = timeout.take() {
+        so.remove();
+    }
+
     {
-        let application_window = application_window.clone();
+        let application_window = application_window.to_owned();
 
         // Cannot shadow "timeout"
-        let timeout_clone = timeout.clone();
+        let timeout_closure = timeout.to_owned();
 
-        let option = timeout.replace(
+        timeout.set(
             (glib::timeout_add_local_once(Duration::from_millis(2_000), move || {
-                timeout_clone.replace(None);
+                timeout_closure.set(None);
 
                 application_window.hide();
             }))
             .into(),
         );
-
-        // Cancel previous timeout
-        if let Some(so) = option {
-            so.remove();
-        }
     }
     /* #endregion */
 
@@ -417,9 +390,9 @@ impl VosdWindow {
             .add_class(gtk::STYLE_CLASS_OSD);
 
         gtk_layer_shell::init_for_window(&application_window);
-        gtk_layer_shell::set_monitor(&application_window, monitor);
-        gtk_layer_shell::set_exclusive_zone(&application_window, -1);
+        // Display above all other windows, including full-screen windows
         gtk_layer_shell::set_layer(&application_window, gtk_layer_shell::Layer::Overlay);
+        gtk_layer_shell::set_monitor(&application_window, monitor);
 
         let boxz = {
             let bo = gtk::Box::new(gtk::Orientation::Horizontal, 12);
@@ -431,9 +404,9 @@ impl VosdWindow {
         application_window.add(&boxz);
 
         Self {
-            application_window,
+            application_window: Rc::new(application_window),
             boxz,
-            timeout: Rc::new(RefCell::new(None)),
+            timeout: Rc::new(Cell::new(None)),
         }
     }
 }
