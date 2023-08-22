@@ -1,14 +1,9 @@
 // https://github.com/ErikReider/SwayOSD
 
-use std::{
-    cell::Cell,
-    collections::HashSet,
-    io::{BufRead, BufReader},
-    process::{Command, Stdio},
-    rc::Rc,
-    thread,
-    time::Duration,
-};
+use std::io::{self, BufRead, Write};
+
+use std::{cell, collections::HashSet, process, rc, thread, time};
+use std::{fs, panic};
 
 use gtk::{
     gdk::{self},
@@ -20,12 +15,13 @@ use gtk::{
 };
 
 const MUTED: &str = "muted";
-const TEN_MILLISECONDS_DURATION: Duration = Duration::from_millis(10);
+const RETRY_DURATION: time::Duration = time::Duration::from_millis(10);
+const TIMEOUT_DURATION: time::Duration = time::Duration::from_millis(2_000);
 
 struct VosdWindow {
-    application_window: Rc<gtk::ApplicationWindow>,
+    application_window: rc::Rc<gtk::ApplicationWindow>,
     boxz: gtk::Box,
-    timeout: Rc<Cell<Option<glib::SourceId>>>,
+    timeout: rc::Rc<cell::Cell<Option<glib::SourceId>>>,
 }
 
 struct PactlData {
@@ -36,6 +32,20 @@ struct PactlData {
 }
 
 fn main() {
+    panic::set_hook(Box::new(|pa| {
+        let system_time = time::SystemTime::now();
+
+        let duration = system_time.duration_since(time::UNIX_EPOCH).unwrap();
+
+        let duration_as_millis = duration.as_millis();
+
+        let mut file = fs::File::create(format!("vosd{}", duration_as_millis)).unwrap();
+
+        writeln!(file, "{}", pa).unwrap();
+
+        process::exit(1);
+    }));
+
     if gtk::init().is_err() {
         panic!();
     }
@@ -59,7 +69,7 @@ fn main() {
         gtk::gio::ApplicationFlags::FLAGS_NONE,
     );
 
-    let vosd_windows = Rc::new(Cell::new(Vec::new()));
+    let vosd_windows = rc::Rc::new(cell::Cell::new(Vec::new()));
 
     application.connect_activate(move |ap| {
         let display = match gdk::Display::default() {
@@ -113,19 +123,20 @@ fn main() {
                 format!("Event 'change' on sink #{}", pactl_data.index)
             };
 
-            let mut child = Command::new("pactl")
+            let mut child = process::Command::new("pactl")
                 .arg("subscribe")
-                .stdout(Stdio::piped())
+                .stdout(process::Stdio::piped())
                 .spawn()
                 .unwrap();
 
-            let buf_reader = BufReader::new(child.stdout.take().unwrap());
+            let buf_reader = io::BufReader::new(child.stdout.take().unwrap());
 
             for re in buf_reader.lines() {
                 let line = re.unwrap();
 
                 if line == listen_for_string {
-                    println!("Sending notification");
+                    // Don't panic if pipe is broken (eprintln!/println! panic)
+                    let _ = writeln!(io::stdout(), "Sending notification");
 
                     let pactl_data = gather_pactl_data();
 
@@ -135,7 +146,9 @@ fn main() {
 
             let result = child.wait();
 
-            eprintln!(
+            // Don't panic if pipe is broken (eprintln!/println! panic)
+            let _ = writeln!(
+                io::stderr(),
                 "\"pactl subscribe\" process ended, starting another one:\n===>\n{:?}\n<===",
                 result
             );
@@ -162,7 +175,7 @@ fn main() {
 }
 
 fn add_window(
-    vosd_windows: &Rc<Cell<Vec<VosdWindow>>>,
+    vosd_windows: &rc::Rc<cell::Cell<Vec<VosdWindow>>>,
     application: &gtk::Application,
     monitor: &gdk::Monitor,
 ) {
@@ -176,7 +189,7 @@ fn add_window(
 }
 
 fn initialize_windows(
-    vosd_windows: &Rc<Cell<Vec<VosdWindow>>>,
+    vosd_windows: &rc::Rc<cell::Cell<Vec<VosdWindow>>>,
     application: &gtk::Application,
     display: &gdk::Display,
 ) {
@@ -192,7 +205,7 @@ fn initialize_windows(
     }
 }
 
-fn close_all_windows(vosd_windows: &Rc<Cell<Vec<VosdWindow>>>) {
+fn close_all_windows(vosd_windows: &rc::Rc<cell::Cell<Vec<VosdWindow>>>) {
     for vo in vosd_windows.take() {
         vo.application_window.close();
     }
@@ -200,9 +213,9 @@ fn close_all_windows(vosd_windows: &Rc<Cell<Vec<VosdWindow>>>) {
 
 fn gather_pactl_data() -> PactlData {
     for i in 0..1_000 {
-        let child = Command::new("pactl")
+        let child = process::Command::new("pactl")
             .args(["--format=json", "list", "sinks"])
-            .stdout(Stdio::piped())
+            .stdout(process::Stdio::piped())
             .spawn()
             .unwrap();
 
@@ -211,9 +224,10 @@ fn gather_pactl_data() -> PactlData {
         let array = value.as_array().unwrap();
 
         if array.is_empty() {
-            eprintln!("array is empty (attempt {})", i + 1);
+            // Don't panic if pipe is broken (eprintln!/println! panic)
+            let _ = writeln!(io::stderr(), "array is empty (attempt {})", i + 1);
 
-            thread::sleep(TEN_MILLISECONDS_DURATION);
+            thread::sleep(RETRY_DURATION);
 
             continue;
         }
@@ -366,7 +380,7 @@ fn show_volume_change_notification(vosd_window: &VosdWindow, pactl_data: &PactlD
         let timeout_closure = timeout.to_owned();
 
         timeout.set(
-            (glib::timeout_add_local_once(Duration::from_millis(2_000), move || {
+            (glib::timeout_add_local_once(TIMEOUT_DURATION, move || {
                 timeout_closure.set(None);
 
                 application_window.hide();
@@ -404,9 +418,9 @@ impl VosdWindow {
         application_window.add(&boxz);
 
         Self {
-            application_window: Rc::new(application_window),
+            application_window: rc::Rc::new(application_window),
             boxz,
-            timeout: Rc::new(Cell::new(None)),
+            timeout: rc::Rc::new(cell::Cell::new(None)),
         }
     }
 }
