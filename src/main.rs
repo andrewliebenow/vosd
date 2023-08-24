@@ -1,5 +1,8 @@
 // https://github.com/ErikReider/SwayOSD
 
+#![deny(clippy::all)]
+#![warn(clippy::pedantic)]
+
 use std::io::{self, BufRead, Write};
 
 use std::{cell, collections::HashSet, process, rc, thread, time};
@@ -39,16 +42,16 @@ fn main() {
 
         let duration_as_millis = duration.as_millis();
 
-        let mut file = fs::File::create(format!("vosd{}", duration_as_millis)).unwrap();
+        let mut file = fs::File::create(format!("vosd{duration_as_millis}")).unwrap();
 
-        writeln!(file, "{}", pa).unwrap();
+        writeln!(file, "{pa}").unwrap();
+
+        let _ = writeln!(io::stderr(), "{pa}");
 
         process::exit(1);
     }));
 
-    if gtk::init().is_err() {
-        panic!();
-    }
+    assert!(gtk::init().is_ok());
 
     let css_provider = gtk::CssProvider::new();
 
@@ -72,16 +75,13 @@ fn main() {
     let vosd_windows = rc::Rc::new(cell::Cell::new(Vec::new()));
 
     application.connect_activate(move |ap| {
-        let display = match gdk::Display::default() {
-            Some(di) => di,
-            _ => return,
-        };
+        let Some(display) = gdk::Display::default() else { return };
 
         initialize_windows(&vosd_windows, ap, &display);
 
         {
-            let ap = ap.to_owned();
-            let vosd_windows = vosd_windows.to_owned();
+            let ap = ap.clone();
+            let vosd_windows = vosd_windows.clone();
 
             display.connect_opened(move |di| {
                 initialize_windows(&vosd_windows, &ap, di);
@@ -89,7 +89,7 @@ fn main() {
         }
 
         {
-            let vosd_windows = vosd_windows.to_owned();
+            let vosd_windows = vosd_windows.clone();
 
             display.connect_closed(move |_, _| {
                 close_all_windows(&vosd_windows);
@@ -97,8 +97,8 @@ fn main() {
         }
 
         {
-            let ap = ap.to_owned();
-            let vosd_windows = vosd_windows.to_owned();
+            let ap = ap.clone();
+            let vosd_windows = vosd_windows.clone();
 
             display.connect_monitor_added(move |_, mo| {
                 add_window(&vosd_windows, &ap, mo);
@@ -106,8 +106,8 @@ fn main() {
         }
 
         {
-            let ap = ap.to_owned();
-            let vosd_windows = vosd_windows.to_owned();
+            let ap = ap.clone();
+            let vosd_windows = vosd_windows.clone();
 
             display.connect_monitor_removed(move |di, _| {
                 initialize_windows(&vosd_windows, &ap, di);
@@ -149,17 +149,17 @@ fn main() {
             // Don't panic if pipe is broken (eprintln!/println! panic)
             let _ = writeln!(
                 io::stderr(),
-                "\"pactl subscribe\" process ended, starting another one:\n===>\n{:?}\n<===",
-                result
+                "\"pactl subscribe\" process ended, starting another one:\n===>\n{result:?}\n<==="
             );
         });
 
         {
-            let vosd_windows = vosd_windows.to_owned();
+            let vosd_windows = vosd_windows.clone();
 
             receiver.attach(None, move |pa| {
                 let vec = vosd_windows.take();
 
+                // TODO Do more work outside of this loop
                 for vo in &vec {
                     show_volume_change_notification(vo, &pa);
                 }
@@ -196,12 +196,9 @@ fn initialize_windows(
     close_all_windows(vosd_windows);
 
     for i in 0..display.n_monitors() {
-        let monitor = match display.monitor(i) {
-            Some(mo) => mo,
-            _ => continue,
-        };
-
-        add_window(vosd_windows, application, &monitor);
+        if let Some(mo) = display.monitor(i) {
+            add_window(vosd_windows, application, &mo);
+        }
     }
 }
 
@@ -268,8 +265,8 @@ fn gather_pactl_data() -> PactlData {
         };
 
         return PactlData {
-            index,
             base_volume,
+            index,
             mute,
             volume,
         };
@@ -311,59 +308,58 @@ fn show_volume_change_notification(vosd_window: &VosdWindow, pactl_data: &PactlD
     /* #endregion */
 
     /* #region Add new widgets */
-    match pactl_data.volume {
-        Some(us) => {
-            let mute = pactl_data.mute;
+    if let Some(us) = pactl_data.volume {
+        let mute = pactl_data.mute;
 
-            let volume_fraction = us as f64 / pactl_data.base_volume as f64;
+        #[allow(clippy::cast_precision_loss)]
+        let volume_fraction = us as f64 / pactl_data.base_volume as f64;
 
-            let icon_segment = match (mute, volume_fraction) {
-                (true, _) => MUTED,
-                (false, fs) if fs == 0.0 => MUTED,
-                (false, fs) if fs > 0.0 && fs <= 0.333 => "low",
-                (false, fs) if fs > 0.333 && fs <= 0.666 => "medium",
-                (false, fs) if fs > 0.666 => "high",
-                _ => panic!(),
-            };
+        let icon_segment = match (mute, volume_fraction) {
+            (true, _) => MUTED,
+            (false, fs) if fs == 0.0 => MUTED,
+            (false, fs) if fs > 0.0 && fs <= 0.333 => "low",
+            (false, fs) if fs > 0.333 && fs <= 0.666 => "medium",
+            (false, fs) if fs > 0.666 => "high",
+            _ => panic!(),
+        };
 
-            let icon_name = format!("audio-volume-{}-symbolic", icon_segment);
+        let icon_name = format!("audio-volume-{icon_segment}-symbolic");
 
-            let image = create_image(&icon_name);
+        let image = create_image(&icon_name);
 
-            boxz.add(&image);
+        boxz.add(&image);
 
-            let progress_bar = create_progress_bar(volume_fraction, mute);
+        let progress_bar = create_progress_bar(volume_fraction, mute);
 
-            boxz.add(&progress_bar);
+        boxz.add(&progress_bar);
 
-            let volume_percent = volume_fraction * 100.0;
+        let volume_percent = volume_fraction * 100.0;
 
-            let volume_percent_integer = volume_percent.round() as u8;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let volume_percent_integer = volume_percent.round() as u8;
 
-            let label_string = format!("{}%", volume_percent_integer);
+        let label_string = format!("{volume_percent_integer}%");
 
-            let label = gtk::Label::new(label_string.as_str().into());
+        let label = gtk::Label::new(label_string.as_str().into());
 
-            // "min-width" prevents a width change when going from 9% to 10% or from 99% to 100%
-            label.style_context().add_class("percentageLabel");
+        // "min-width" prevents a width change when going from 9% to 10% or from 99% to 100%
+        label.style_context().add_class("percentageLabel");
 
-            if mute {
-                label.style_context().add_class("percentageLabel-inactive");
-            }
-
-            boxz.add(&label);
+        if mute {
+            label.style_context().add_class("percentageLabel-inactive");
         }
-        _ => {
-            /* #region Handle broken volume */
-            let image = create_image("dialog-question-symbolic");
 
-            boxz.add(&image);
+        boxz.add(&label);
+    } else {
+        /* #region Handle broken volume */
+        let image = create_image("dialog-question-symbolic");
 
-            let label = gtk::Label::new(("Volume is not even").into());
+        boxz.add(&image);
 
-            boxz.add(&label);
-            /* #endregion */
-        }
+        let label = gtk::Label::new(("Volume is not even").into());
+
+        boxz.add(&label);
+        /* #endregion */
     }
     /* #endregion */
 
@@ -374,10 +370,10 @@ fn show_volume_change_notification(vosd_window: &VosdWindow, pactl_data: &PactlD
     }
 
     {
-        let application_window = application_window.to_owned();
+        let application_window = application_window.clone();
 
         // Cannot shadow "timeout"
-        let timeout_closure = timeout.to_owned();
+        let timeout_closure = timeout.clone();
 
         timeout.set(
             (glib::timeout_add_local_once(TIMEOUT_DURATION, move || {
