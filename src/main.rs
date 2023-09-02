@@ -118,9 +118,9 @@ fn main() {
 
         thread::spawn(move || loop {
             let listen_for_string = {
-                let pactl_data = gather_pactl_data();
+                let PactlData { index, .. } = gather_pactl_data();
 
-                format!("Event 'change' on sink #{}", pactl_data.index)
+                format!("Event 'change' on sink #{index}")
             };
 
             let mut child = process::Command::new("pactl")
@@ -229,21 +229,44 @@ fn gather_pactl_data() -> PactlData {
             continue;
         }
 
-        let first_element_object = array.get(0).unwrap().as_object().unwrap();
+        let matching_element_object = array
+            .iter()
+            .find_map(|va| {
+                let object = va.as_object().unwrap();
 
-        let index = first_element_object.get("index").unwrap().as_u64().unwrap();
+                let name_value = object.get("name").unwrap();
 
-        let base_volume_object = first_element_object
+                let name = name_value.as_str().unwrap();
+
+                if name.starts_with("alsa_output.") {
+                    return Some(object);
+                }
+
+                None
+            })
+            .unwrap();
+
+        let index = matching_element_object
+            .get("index")
+            .unwrap()
+            .as_u64()
+            .unwrap();
+
+        let base_volume_object = matching_element_object
             .get("base_volume")
             .unwrap()
             .as_object()
             .unwrap();
 
-        let mute = first_element_object.get("mute").unwrap().as_bool().unwrap();
+        let mute = matching_element_object
+            .get("mute")
+            .unwrap()
+            .as_bool()
+            .unwrap();
 
         let base_volume = base_volume_object.get("value").unwrap().as_u64().unwrap();
 
-        let volume_object = first_element_object
+        let volume_object = matching_element_object
             .get("volume")
             .unwrap()
             .as_object()
