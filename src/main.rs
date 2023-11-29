@@ -16,6 +16,7 @@ use gtk::{
         ContainerExt, CssProviderExt, GtkWindowExt, ProgressBarExt, StyleContextExt, WidgetExt,
     },
 };
+use gtk_layer_shell::LayerShell;
 
 const MUTED: &str = "muted";
 const RETRY_DURATION: time::Duration = time::Duration::from_millis(10);
@@ -34,6 +35,7 @@ struct PactlData {
     volume: Option<u64>,
 }
 
+#[allow(clippy::too_many_lines)]
 fn main() {
     panic::set_hook(Box::new(|pa| {
         let system_time = time::SystemTime::now();
@@ -75,7 +77,9 @@ fn main() {
     let vosd_windows = rc::Rc::new(cell::Cell::new(Vec::new()));
 
     application.connect_activate(move |ap| {
-        let Some(display) = gdk::Display::default() else { return };
+        let Some(display) = gdk::Display::default() else {
+            return;
+        };
 
         initialize_windows(&vosd_windows, ap, &display);
 
@@ -114,43 +118,60 @@ fn main() {
             });
         }
 
-        let (sender, receiver) = glib::MainContext::channel::<PactlData>(glib::PRIORITY_DEFAULT);
+        let (sender, receiver) = glib::MainContext::channel::<PactlData>(glib::Priority::DEFAULT);
 
-        thread::spawn(move || loop {
-            let listen_for_string = {
-                let PactlData { index, .. } = gather_pactl_data();
+        thread::spawn(move || {
+            let mut mute_volume: Option<(bool, Option<u64>)> = Option::None;
 
-                format!("Event 'change' on sink #{index}")
-            };
+            loop {
+                let listen_for_string = {
+                    let PactlData { index, .. } = gather_pactl_data();
 
-            let mut child = process::Command::new("pactl")
-                .arg("subscribe")
-                .stdout(process::Stdio::piped())
-                .spawn()
-                .unwrap();
+                    format!("Event 'change' on sink #{index}")
+                };
 
-            let buf_reader = io::BufReader::new(child.stdout.take().unwrap());
+                let mut child = process::Command::new("pactl")
+                    .arg("subscribe")
+                    .stdout(process::Stdio::piped())
+                    .spawn()
+                    .unwrap();
 
-            for re in buf_reader.lines() {
-                let line = re.unwrap();
+                let buf_reader = io::BufReader::new(child.stdout.take().unwrap());
 
-                if line == listen_for_string {
-                    // Don't panic if pipe is broken (eprintln!/println! panic)
-                    let _ = writeln!(io::stdout(), "Sending notification");
+                for re in buf_reader.lines() {
+                    let line = re.unwrap();
 
-                    let pactl_data = gather_pactl_data();
+                    if line == listen_for_string {
+                        // Don't panic if pipe is broken (eprintln!/println! panic)
+                        let _ = writeln!(io::stdout(), "Sending notification");
 
-                    sender.send(pactl_data).unwrap();
+                        let pactl_data = gather_pactl_data();
+
+                        let mute = pactl_data.mute;
+                        let volume = pactl_data.volume;
+
+                        let call_send = if let Some((old_mute, old_volume)) = mute_volume {
+                            mute != old_mute || volume != old_volume
+                        } else {
+                            true
+                        };
+
+                        mute_volume = Some((mute, volume));
+
+                        if call_send {
+                            sender.send(pactl_data).unwrap();
+                        }
+                    }
                 }
-            }
 
-            let result = child.wait();
+                let result = child.wait();
 
-            // Don't panic if pipe is broken (eprintln!/println! panic)
-            let _ = writeln!(
+                // Don't panic if pipe is broken (eprintln!/println! panic)
+                let _ = writeln!(
                 io::stderr(),
                 "\"pactl subscribe\" process ended, starting another one:\n===>\n{result:?}\n<==="
             );
+            }
         });
 
         {
@@ -166,12 +187,16 @@ fn main() {
 
                 vosd_windows.replace(vec);
 
-                gtk::prelude::Continue(true)
+                glib::ControlFlow::Continue
             });
         }
     });
 
-    application.run();
+    let exit_code = application.run();
+
+    let exit_code_value = exit_code.value();
+
+    panic!("run finished executing (exit_code_value: {exit_code_value})")
 }
 
 fn add_window(
@@ -422,10 +447,10 @@ impl VosdWindow {
             .style_context()
             .add_class(gtk::STYLE_CLASS_OSD);
 
-        gtk_layer_shell::init_for_window(&application_window);
+        application_window.init_layer_shell();
         // Display above all other windows, including full-screen windows
-        gtk_layer_shell::set_layer(&application_window, gtk_layer_shell::Layer::Overlay);
-        gtk_layer_shell::set_monitor(&application_window, monitor);
+        application_window.set_layer(gtk_layer_shell::Layer::Overlay);
+        application_window.set_monitor(monitor);
 
         let boxz = {
             let bo = gtk::Box::new(gtk::Orientation::Horizontal, 12);
