@@ -19,8 +19,9 @@ use gtk::{
 use gtk_layer_shell::LayerShell;
 
 const MUTED: &str = "muted";
+const ONE_SECOND_DURATION: time::Duration = time::Duration::from_secs(1);
 const RETRY_DURATION: time::Duration = time::Duration::from_millis(10);
-const TIMEOUT_DURATION: time::Duration = time::Duration::from_millis(2_000);
+const TIMEOUT_DURATION: time::Duration = time::Duration::from_secs(2);
 
 struct VosdWindow {
     application_window: rc::Rc<gtk::ApplicationWindow>,
@@ -69,134 +70,140 @@ fn main() {
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 
-    let application = gtk::Application::new(
-        ("io.github.andrewliebenow.Vosd").into(),
-        gtk::gio::ApplicationFlags::FLAGS_NONE,
-    );
+    loop {
+        let application = gtk::Application::new(
+            ("io.github.andrewliebenow.Vosd").into(),
+            gtk::gio::ApplicationFlags::FLAGS_NONE,
+        );
 
-    let vosd_windows = rc::Rc::new(cell::Cell::new(Vec::new()));
+        let vosd_windows = rc::Rc::new(cell::Cell::new(Vec::new()));
 
-    application.connect_activate(move |ap| {
-        let Some(display) = gdk::Display::default() else {
-            return;
-        };
+        application.connect_activate(move |ap| {
+            let Some(display) = gdk::Display::default() else {
+                return;
+            };
 
-        initialize_windows(&vosd_windows, ap, &display);
+            initialize_windows(&vosd_windows, ap, &display);
 
-        {
-            let ap = ap.clone();
-            let vosd_windows = vosd_windows.clone();
+            {
+                let ap = ap.clone();
+                let vosd_windows = vosd_windows.clone();
 
-            display.connect_opened(move |di| {
-                initialize_windows(&vosd_windows, &ap, di);
-            });
-        }
+                display.connect_opened(move |di| {
+                    initialize_windows(&vosd_windows, &ap, di);
+                });
+            }
 
-        {
-            let vosd_windows = vosd_windows.clone();
+            {
+                let vosd_windows = vosd_windows.clone();
 
-            display.connect_closed(move |_, _| {
-                close_all_windows(&vosd_windows);
-            });
-        }
+                display.connect_closed(move |_, _| {
+                    close_all_windows(&vosd_windows);
+                });
+            }
 
-        {
-            let ap = ap.clone();
-            let vosd_windows = vosd_windows.clone();
+            {
+                let ap = ap.clone();
+                let vosd_windows = vosd_windows.clone();
 
-            display.connect_monitor_added(move |_, mo| {
-                add_window(&vosd_windows, &ap, mo);
-            });
-        }
+                display.connect_monitor_added(move |_, mo| {
+                    add_window(&vosd_windows, &ap, mo);
+                });
+            }
 
-        {
-            let ap = ap.clone();
-            let vosd_windows = vosd_windows.clone();
+            {
+                let ap = ap.clone();
+                let vosd_windows = vosd_windows.clone();
 
-            display.connect_monitor_removed(move |di, _| {
-                initialize_windows(&vosd_windows, &ap, di);
-            });
-        }
+                display.connect_monitor_removed(move |di, _| {
+                    initialize_windows(&vosd_windows, &ap, di);
+                });
+            }
 
-        let (sender, receiver) = glib::MainContext::channel::<PactlData>(glib::Priority::DEFAULT);
+            let (sender, receiver) =
+                glib::MainContext::channel::<PactlData>(glib::Priority::DEFAULT);
 
-        thread::spawn(move || {
-            let mut mute_volume: Option<(bool, Option<u64>)> = Option::None;
+            thread::spawn(move || {
+                let mut mute_volume: Option<(bool, Option<u64>)> = Option::None;
 
-            loop {
-                let listen_for_string = {
-                    let PactlData { index, .. } = gather_pactl_data();
+                loop {
+                    let listen_for_string = {
+                        let PactlData { index, .. } = gather_pactl_data();
 
-                    format!("Event 'change' on sink #{index}")
-                };
+                        format!("Event 'change' on sink #{index}")
+                    };
 
-                let mut child = process::Command::new("pactl")
-                    .arg("subscribe")
-                    .stdout(process::Stdio::piped())
-                    .spawn()
-                    .unwrap();
+                    let mut child = process::Command::new("pactl")
+                        .arg("subscribe")
+                        .stdout(process::Stdio::piped())
+                        .spawn()
+                        .unwrap();
 
-                let buf_reader = io::BufReader::new(child.stdout.take().unwrap());
+                    let buf_reader = io::BufReader::new(child.stdout.take().unwrap());
 
-                for re in buf_reader.lines() {
-                    let line = re.unwrap();
+                    for re in buf_reader.lines() {
+                        let line = re.unwrap();
 
-                    if line == listen_for_string {
-                        // Don't panic if pipe is broken (eprintln!/println! panic)
-                        let _ = writeln!(io::stdout(), "Sending notification");
+                        if line == listen_for_string {
+                            // Don't panic if pipe is broken (eprintln!/println! panic)
+                            let _ = writeln!(io::stdout(), "Sending notification");
 
-                        let pactl_data = gather_pactl_data();
+                            let pactl_data = gather_pactl_data();
 
-                        let mute = pactl_data.mute;
-                        let volume = pactl_data.volume;
+                            let mute = pactl_data.mute;
+                            let volume = pactl_data.volume;
 
-                        let call_send = if let Some((old_mute, old_volume)) = mute_volume {
-                            mute != old_mute || volume != old_volume
-                        } else {
-                            true
-                        };
+                            let call_send = if let Some((old_mute, old_volume)) = mute_volume {
+                                mute != old_mute || volume != old_volume
+                            } else {
+                                true
+                            };
 
-                        mute_volume = Some((mute, volume));
+                            mute_volume = Some((mute, volume));
 
-                        if call_send {
-                            sender.send(pactl_data).unwrap();
+                            if call_send {
+                                sender.send(pactl_data).unwrap();
+                            }
                         }
                     }
-                }
 
-                let result = child.wait();
+                    let result = child.wait();
 
-                // Don't panic if pipe is broken (eprintln!/println! panic)
-                let _ = writeln!(
+                    // Don't panic if pipe is broken (eprintln!/println! panic)
+                    let _ = writeln!(
                 io::stderr(),
                 "\"pactl subscribe\" process ended, starting another one:\n===>\n{result:?}\n<==="
             );
+                }
+            });
+
+            {
+                let vosd_windows = vosd_windows.clone();
+
+                receiver.attach(None, move |pa| {
+                    let vec = vosd_windows.take();
+
+                    // TODO Do more work outside of this loop
+                    for vo in &vec {
+                        show_volume_change_notification(vo, &pa);
+                    }
+
+                    vosd_windows.replace(vec);
+
+                    glib::ControlFlow::Continue
+                });
             }
         });
 
-        {
-            let vosd_windows = vosd_windows.clone();
+        let exit_code = application.run();
 
-            receiver.attach(None, move |pa| {
-                let vec = vosd_windows.take();
+        let exit_code_value = exit_code.value();
 
-                // TODO Do more work outside of this loop
-                for vo in &vec {
-                    show_volume_change_notification(vo, &pa);
-                }
+        // TODO Log this somewhere
+        eprintln!("run finished executing (exit_code_value: {exit_code_value})");
 
-                vosd_windows.replace(vec);
-
-                glib::ControlFlow::Continue
-            });
-        }
-    });
-
-    let exit_code = application.run();
-
-    let exit_code_value = exit_code.value();
-
-    panic!("run finished executing (exit_code_value: {exit_code_value})")
+        thread::sleep(ONE_SECOND_DURATION);
+    }
 }
 
 fn add_window(
