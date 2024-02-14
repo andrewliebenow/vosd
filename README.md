@@ -15,6 +15,8 @@ You will likely want to run `vosd` as a daemon (`setsid --fork vosd` works).
 
 Demo:
 
+![`vosd` demo](vosd.gif)
+
 [![`vosd` demo](http://img.youtube.com/vi/SBrQ9eMF6KQ/0.jpg)](http://www.youtube.com/watch?v=SBrQ9eMF6KQ "`vosd` demo")
 
 ## License
