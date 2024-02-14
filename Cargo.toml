@@ -13,6 +13,7 @@ serde_json = {default-features = false, features = [
 
 [package]
 edition = "2021"
+license = "MIT"
 name = "vosd"
 version = "0.1.0"
 
