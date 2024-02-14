@@ -1,5 +1,3 @@
-// https://github.com/ErikReider/SwayOSD
-
 #![deny(clippy::all)]
 #![warn(clippy::pedantic)]
 
@@ -17,6 +15,7 @@ use gtk::{
     },
 };
 use gtk_layer_shell::LayerShell;
+use nameof::name_of;
 
 const MUTED: &str = "muted";
 const ONE_SECOND_DURATION: time::Duration = time::Duration::from_secs(1);
@@ -54,6 +53,8 @@ fn main() {
         process::exit(1);
     }));
 
+    env_logger::init();
+
     assert!(gtk::init().is_ok());
 
     let css_provider = gtk::CssProvider::new();
@@ -72,7 +73,7 @@ fn main() {
 
     loop {
         let application = gtk::Application::new(
-            ("io.github.andrewliebenow.Vosd").into(),
+            "io.github.andrewliebenow.Vosd".into(),
             gtk::gio::ApplicationFlags::FLAGS_NONE,
         );
 
@@ -120,8 +121,9 @@ fn main() {
                 });
             }
 
-            let (sender, receiver) =
-                glib::MainContext::channel::<PactlData>(glib::Priority::DEFAULT);
+            let (sender, receiver) = glib::MainContext::channel::<PactlData>(
+                glib::Priority::DEFAULT
+            );
 
             thread::spawn(move || {
                 let mut mute_volume: Option<(bool, Option<u64>)> = Option::None;
@@ -133,20 +135,20 @@ fn main() {
                         format!("Event 'change' on sink #{index}")
                     };
 
-                    let mut child = process::Command::new("pactl")
+                    let mut child = process::Command
+                        ::new("pactl")
                         .arg("subscribe")
                         .stdout(process::Stdio::piped())
                         .spawn()
                         .unwrap();
 
-                    let buf_reader = io::BufReader::new(child.stdout.take().unwrap());
+                    let buf_reader = io::BufReader::new(child.stdout.as_mut().unwrap());
 
                     for re in buf_reader.lines() {
                         let line = re.unwrap();
 
                         if line == listen_for_string {
-                            // Don't panic if pipe is broken (eprintln!/println! panic)
-                            let _ = writeln!(io::stdout(), "Sending notification");
+                            log::info!("Sending notification");
 
                             let pactl_data = gather_pactl_data();
 
@@ -169,11 +171,9 @@ fn main() {
 
                     let result = child.wait();
 
-                    // Don't panic if pipe is broken (eprintln!/println! panic)
-                    let _ = writeln!(
-                io::stderr(),
-                "\"pactl subscribe\" process ended, starting another one:\n===>\n{result:?}\n<==="
-            );
+                    log::error!(
+                        "\"pactl subscribe\" process ended, starting another one:\n===>\n{result:?}\n<==="
+                    );
                 }
             });
 
@@ -200,7 +200,10 @@ fn main() {
         let exit_code_value = exit_code.value();
 
         // TODO Log this somewhere
-        eprintln!("run finished executing (exit_code_value: {exit_code_value})");
+        log::error!(
+            "\"run\" finished executing ({}: {exit_code_value})",
+            name_of!(exit_code_value)
+        );
 
         thread::sleep(ONE_SECOND_DURATION);
     }
@@ -242,19 +245,22 @@ fn close_all_windows(vosd_windows: &rc::Rc<cell::Cell<Vec<VosdWindow>>>) {
 
 fn gather_pactl_data() -> PactlData {
     for i in 0..1_000 {
-        let child = process::Command::new("pactl")
+        let mut child = process::Command::new("pactl")
             .args(["--format=json", "list", "sinks"])
             .stdout(process::Stdio::piped())
             .spawn()
             .unwrap();
 
-        let value: serde_json::Value = serde_json::from_reader(child.stdout.unwrap()).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_reader(child.stdout.as_mut().unwrap()).unwrap();
+
+        // Avoid zombie processes
+        child.wait().unwrap();
 
         let array = value.as_array().unwrap();
 
         if array.is_empty() {
-            // Don't panic if pipe is broken (eprintln!/println! panic)
-            let _ = writeln!(io::stderr(), "array is empty (attempt {})", i + 1);
+            log::warn!("array is empty (attempt {})", i + 1);
 
             thread::sleep(RETRY_DURATION);
 
@@ -367,7 +373,7 @@ fn show_volume_change_notification(vosd_window: &VosdWindow, pactl_data: &PactlD
         let mute = pactl_data.mute;
 
         #[allow(clippy::cast_precision_loss)]
-        let volume_fraction = us as f64 / pactl_data.base_volume as f64;
+        let volume_fraction = (us as f64) / (pactl_data.base_volume as f64);
 
         let icon_segment = match (mute, volume_fraction) {
             (true, _) => MUTED,
@@ -411,7 +417,7 @@ fn show_volume_change_notification(vosd_window: &VosdWindow, pactl_data: &PactlD
 
         boxz.add(&image);
 
-        let label = gtk::Label::new(("Volume is not even").into());
+        let label = gtk::Label::new("Volume is not even".into());
 
         boxz.add(&label);
         /* #endregion */
@@ -431,11 +437,11 @@ fn show_volume_change_notification(vosd_window: &VosdWindow, pactl_data: &PactlD
         let timeout_closure = timeout.clone();
 
         timeout.set(
-            (glib::timeout_add_local_once(TIMEOUT_DURATION, move || {
+            glib::timeout_add_local_once(TIMEOUT_DURATION, move || {
                 timeout_closure.set(None);
 
                 application_window.hide();
-            }))
+            })
             .into(),
         );
     }
@@ -456,6 +462,7 @@ impl VosdWindow {
 
         application_window.init_layer_shell();
         // Display above all other windows, including full-screen windows
+        // Use of gtk_layer_shell follows https://github.com/ErikReider/SwayOSD
         application_window.set_layer(gtk_layer_shell::Layer::Overlay);
         application_window.set_monitor(monitor);
 
