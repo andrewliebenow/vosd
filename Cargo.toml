@@ -2,14 +2,14 @@
 env_logger = {default-features = false, features = [
   "auto-color",
   "humantime"
-], version = "=0.11.2"}
+], version = "=0.11.3"}
 gtk = "=0.18.1"
 gtk-layer-shell = "=0.8.0"
-log = "=0.4.20"
+log = "=0.4.21"
 nameof = "=1.2.2"
 serde_json = {default-features = false, features = [
   "std"
-], version = "=1.0.113"}
+], version = "=1.0.117"}
 
 [package]
 edition = "2021"
