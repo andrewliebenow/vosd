@@ -6,7 +6,7 @@
 
 ```shell
 # TODO Publish to crates.io
-git clone https://github.com/andrewliebenow/vosd && cargo install --path ./vosd
+cargo install --git https://github.com/andrewliebenow/vosd
 ```
 
 ## Usage
