@@ -2,6 +2,7 @@
 #![warn(clippy::pedantic)]
 
 use anyhow::Context;
+use clap::Parser;
 use gtk::gdk::{Monitor, Screen};
 use gtk::gio::ApplicationFlags;
 use gtk::glib::{Sender, SourceId};
@@ -15,12 +16,17 @@ use gtk::{
 };
 use gtk::{Application, ApplicationWindow, CssProvider, StyleContext};
 use gtk_layer_shell::LayerShell;
+use nix::fcntl::OFlag;
+use nix::sys::stat::Mode;
+use nix::unistd::{self, ForkResult};
+use nix::{fcntl, libc};
 use serde_json::{Map, Value};
 use std::cell::Cell;
 use std::env;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Error, Write};
 use std::panic::{self, PanicInfo};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::time::{Duration, SystemTime};
@@ -35,6 +41,15 @@ const RETRY_DURATION: Duration = Duration::from_millis(10_u64);
 const TIMEOUT_DURATION: Duration = Duration::from_secs(2_u64);
 
 const CSS_CSS_SLICE: &[u8] = include_bytes!("./css.css");
+
+/// Render an OSD when the volume level is changed
+#[derive(Parser)]
+#[command(author, version, about)]
+struct VosdArgs {
+    /// Run as a daemon
+    #[arg(long = "daemon", short = 'd')]
+    daemon: bool,
+}
 
 struct VosdWindow {
     application_window: Rc<ApplicationWindow>,
@@ -76,30 +91,89 @@ fn main() -> Result<(), i32> {
 }
 
 fn start() -> anyhow::Result<()> {
-    panic::set_hook(Box::new(|pa| {
-        fn write_panic_info_to_file(panic_info: &PanicInfo) -> anyhow::Result<()> {
+    const FOR_RUN_WITH_ARGS: [&str; 0_usize] = [];
+
+    let temp_dir_path_buf = env::temp_dir();
+
+    panic::set_hook(Box::new(move |pa| {
+        fn write_panic_info_to_file(
+            temp_dir_path: &Path,
+            panic_info: &PanicInfo,
+        ) -> anyhow::Result<()> {
             let system_time = SystemTime::now();
 
             let duration = system_time.duration_since(time::UNIX_EPOCH)?;
 
-            let duration_as_millis = duration.as_millis();
+            let duration_as_nanos = duration.as_nanos();
 
-            let mut file = File::create(format!("vosd{duration_as_millis}"))?;
+            let mut path_buf = temp_dir_path.to_path_buf();
 
-            writeln!(file, "{panic_info}")?;
+            path_buf.push(format!("vosd{duration_as_nanos}"));
+
+            let mut file = File::options()
+                .create_new(true)
+                .write(true)
+                .open(path_buf)?;
+
+            writeln!(file, "{panic_info:?}")?;
 
             Ok(())
         }
 
         // TODO
-        let _: Result<(), Error> = writeln!(io::stderr(), "{pa}");
+        let _: Result<(), Error> = writeln!(io::stderr(), "{pa:?}");
 
         // TODO
-        let _: anyhow::Result<()> = write_panic_info_to_file(pa);
+        let _: anyhow::Result<()> = write_panic_info_to_file(&temp_dir_path_buf, pa);
 
         // TODO
         process::exit(2_i32);
     }));
+
+    let VosdArgs { daemon } = VosdArgs::parse();
+
+    // https://0xjet.github.io/3OHA/2022/04/11/post.html
+    // https://unix.stackexchange.com/questions/56495/whats-the-difference-between-running-a-program-as-a-daemon-and-forking-it-into/56497#56497
+    // https://stackoverflow.com/questions/5384168/how-to-make-a-daemon-process#comment64993302_5384168
+    if daemon {
+        tracing::info!("Attempting to run as a daemon");
+
+        let fork_result = unsafe { unistd::fork() }?;
+
+        if let ForkResult::Parent { .. } = fork_result {
+            process::exit(libc::EXIT_SUCCESS);
+        }
+
+        unistd::setsid()?;
+
+        unistd::chdir("/")?;
+
+        // TODO
+        // Close all file descriptors, not just these?
+        {
+            unistd::close(libc::STDIN_FILENO)?;
+
+            unistd::close(libc::STDOUT_FILENO)?;
+
+            unistd::close(libc::STDERR_FILENO)?;
+        }
+
+        {
+            anyhow::ensure!(
+                fcntl::open("/dev/null", OFlag::O_RDWR, Mode::empty())? == libc::STDIN_FILENO
+            );
+
+            anyhow::ensure!(unistd::dup(libc::STDIN_FILENO)? == libc::STDOUT_FILENO);
+
+            anyhow::ensure!(unistd::dup(libc::STDIN_FILENO)? == libc::STDERR_FILENO);
+        }
+
+        let fork_result = unsafe { unistd::fork() }?;
+
+        if let ForkResult::Parent { .. } = fork_result {
+            process::exit(libc::EXIT_SUCCESS);
+        }
+    }
 
     gtk::init()?;
 
@@ -115,6 +189,8 @@ fn start() -> anyhow::Result<()> {
         gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
     );
 
+    // TODO
+    // Remove loop?
     loop {
         let application = Application::new(
             Some("io.github.andrewliebenow.Vosd"),
@@ -135,7 +211,8 @@ fn start() -> anyhow::Result<()> {
             connect_activate_function(&vosd_windows, &application_rc_clone);
         });
 
-        let exit_code = application_rc.run();
+        // Do not pass arguments into GApplication
+        let exit_code = application_rc.run_with_args(&FOR_RUN_WITH_ARGS);
 
         let exit_code_value = exit_code.value();
 

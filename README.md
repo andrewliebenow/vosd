@@ -11,7 +11,18 @@ cargo install --git https://github.com/andrewliebenow/vosd
 
 ## Usage
 
-You will likely want to run `vosd` as a daemon (`setsid --fork vosd` works).
+```shell
+Render an OSD when the volume level is changed
+
+Usage: vosd [OPTIONS]
+
+Options:
+  -d, --daemon   Run as a daemon
+  -h, --help     Print help
+  -V, --version  Print version
+```
+
+You will likely want to run `vosd` as a daemon (`vosd --daemon`).
 
 Demo:
 
