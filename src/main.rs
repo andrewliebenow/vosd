@@ -25,7 +25,7 @@ use std::cell::Cell;
 use std::env;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Error, Write};
-use std::panic::{self, PanicInfo};
+use std::panic::{self, PanicHookInfo};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::rc::Rc;
@@ -64,7 +64,6 @@ struct PactlData {
     volume: Option<u64>,
 }
 
-#[allow(clippy::too_many_lines)]
 fn main() -> Result<(), i32> {
     // TODO
     env::set_var("RUST_BACKTRACE", "1");
@@ -92,43 +91,6 @@ fn main() -> Result<(), i32> {
 
 fn start() -> anyhow::Result<()> {
     const FOR_RUN_WITH_ARGS: [&str; 0_usize] = [];
-
-    let temp_dir_path_buf = env::temp_dir();
-
-    panic::set_hook(Box::new(move |pa| {
-        fn write_panic_info_to_file(
-            temp_dir_path: &Path,
-            panic_info: &PanicInfo,
-        ) -> anyhow::Result<()> {
-            let system_time = SystemTime::now();
-
-            let duration = system_time.duration_since(time::UNIX_EPOCH)?;
-
-            let duration_as_nanos = duration.as_nanos();
-
-            let mut path_buf = temp_dir_path.to_path_buf();
-
-            path_buf.push(format!("vosd{duration_as_nanos}"));
-
-            let mut file = File::options()
-                .create_new(true)
-                .write(true)
-                .open(path_buf)?;
-
-            writeln!(file, "{panic_info:?}")?;
-
-            Ok(())
-        }
-
-        // TODO
-        let _: Result<(), Error> = writeln!(io::stderr(), "{pa:?}");
-
-        // TODO
-        let _: anyhow::Result<()> = write_panic_info_to_file(&temp_dir_path_buf, pa);
-
-        // TODO
-        process::exit(2_i32);
-    }));
 
     let VosdArgs { daemon } = VosdArgs::parse();
 
@@ -174,6 +136,43 @@ fn start() -> anyhow::Result<()> {
             process::exit(libc::EXIT_SUCCESS);
         }
     }
+
+    let temp_dir_path_buf = env::temp_dir();
+
+    panic::set_hook(Box::new(move |pa| {
+        fn write_panic_hook_info_to_file(
+            temp_dir_path: &Path,
+            panic_hook_info: &PanicHookInfo,
+        ) -> anyhow::Result<()> {
+            let system_time = SystemTime::now();
+
+            let duration = system_time.duration_since(time::UNIX_EPOCH)?;
+
+            let duration_as_nanos = duration.as_nanos();
+
+            let mut path_buf = temp_dir_path.to_path_buf();
+
+            path_buf.push(format!("vosd{duration_as_nanos}"));
+
+            let mut file = File::options()
+                .create_new(true)
+                .write(true)
+                .open(path_buf)?;
+
+            writeln!(file, "{panic_hook_info:?}")?;
+
+            Ok(())
+        }
+
+        // TODO
+        let _: Result<(), Error> = writeln!(io::stderr(), "{pa:?}");
+
+        // TODO
+        let _: anyhow::Result<()> = write_panic_hook_info_to_file(&temp_dir_path_buf, pa);
+
+        // TODO
+        process::exit(2_i32);
+    }));
 
     gtk::init()?;
 

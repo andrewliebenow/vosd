@@ -4,14 +4,15 @@
 
 ## Installation
 
-```shell
+```Shell
 # TODO Publish to crates.io
 cargo install --git https://github.com/andrewliebenow/vosd
 ```
 
 ## Usage
 
-```shell
+```Shell
+❯ vosd --help
 Render an OSD when the volume level is changed
 
 Usage: vosd [OPTIONS]

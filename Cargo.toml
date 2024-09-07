@@ -1,5 +1,8 @@
 [dependencies]
-anyhow = {default-features = false, features = ["std"], version = "=1.0.87"}
+anyhow = {default-features = false, features = [
+  "backtrace",
+  "std"
+], version = "=1.0.87"}
 clap = {default-features = false, features = [
   "color",
   "derive",
@@ -36,5 +39,5 @@ version = "0.1.0"
 
 [profile.release]
 codegen-units = 1
-lto = true
-strip = true
+lto = "fat"
+strip = "symbols"
