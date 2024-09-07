@@ -24,7 +24,7 @@ Options:
 
 You will likely want to run `vosd` as a daemon (`vosd --daemon`).
 
-Demo:
+## Demo
 
 ![`vosd` demo](vosd.gif)
 
