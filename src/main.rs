@@ -1,6 +1,7 @@
 #![deny(clippy::all)]
 #![warn(clippy::pedantic)]
 
+use ahash::AHashSet;
 use anyhow::Context;
 use clap::Parser;
 use gtk::gdk::{Monitor, Screen};
@@ -30,7 +31,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::time::{Duration, SystemTime};
-use std::{collections::HashSet, process, thread, time};
+use std::{process, thread, time};
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::EnvFilter;
@@ -302,7 +303,7 @@ fn connect_activate_function(
 }
 
 fn spawn_function(sender: &Sender<PactlData>) -> anyhow::Result<()> {
-    let mut mute_volume: Option<(bool, Option<u64>)> = Option::None;
+    let mut mute_volume = Option::<(bool, Option<u64>)>::None;
 
     loop {
         let listen_for_string = {
@@ -457,17 +458,17 @@ fn gather_pactl_data() -> anyhow::Result<PactlData> {
             .as_object()
             .context("TODO")?;
 
-        let mut hash_set = HashSet::<u64>::with_capacity(volume_object.len());
+        let mut a_hash_set = AHashSet::<u64>::with_capacity(volume_object.len());
 
         for (_, va) in volume_object {
             let ma = va.as_object().context("TODO")?;
 
             let us = ma.get("value").context("TODO")?.as_u64().context("TODO")?;
 
-            hash_set.insert(us);
+            a_hash_set.insert(us);
         }
 
-        let mut into_iter = hash_set.into_iter();
+        let mut into_iter = a_hash_set.into_iter();
 
         let volume = if let Some(us) = into_iter.next() {
             match into_iter.next() {
