@@ -6,7 +6,7 @@ ahash = {default-features = false, features = [
 anyhow = {default-features = false, features = [
   "backtrace",
   "std"
-], version = "=1.0.87"}
+], version = "=1.0.88"}
 clap = {default-features = false, features = [
   "color",
   "derive",
