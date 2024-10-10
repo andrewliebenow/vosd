@@ -1,39 +1,39 @@
 [dependencies]
-ahash = {default-features = false, features = [
+ahash = { default-features = false, features = [
   "runtime-rng",
-  "std"
-], version = "=0.8.11"}
-anyhow = {default-features = false, features = [
+  "std",
+], version = "=0.8.11" }
+anyhow = { default-features = false, features = [
   "backtrace",
-  "std"
-], version = "=1.0.89"}
-clap = {default-features = false, features = [
+  "std",
+], version = "=1.0.89" }
+clap = { default-features = false, features = [
   "color",
   "derive",
   "help",
   "std",
   "suggestions",
-  "usage"
-], version = "=4.5.17"}
-gtk = {default-features = false, version = "=0.18.1"}
-gtk-layer-shell = {default-features = false, version = "=0.8.1"}
-nameof = {default-features = false, version = "=1.2.2"}
-nix = {default-features = false, features = [
+  "usage",
+], version = "=4.5.20" }
+gtk = { default-features = false, version = "=0.18.1" }
+gtk-layer-shell = { default-features = false, version = "=0.8.1" }
+nameof = { default-features = false, version = "=1.2.2" }
+nix = { default-features = false, features = [
   "fs",
-  "process"
-], version = "=0.29.0"}
-serde_json = {default-features = false, features = [
-  "std"
-], version = "=1.0.128"}
-tracing = {default-features = false, version = "=0.1.40"}
-tracing-subscriber = {default-features = false, features = [
+  "process",
+], version = "=0.29.0" }
+serde_json = { default-features = false, features = [
+  "std",
+], version = "=1.0.128" }
+tracing = { default-features = false, version = "=0.1.40" }
+tracing-subscriber = { default-features = false, features = [
   "ansi",
   "env-filter",
   "fmt",
   "smallvec",
   "std",
-  "tracing-log"
-], version = "=0.3.18"}
+  "tracing-log",
+], version = "=0.3.18" }
 
 [package]
 edition = "2021"
