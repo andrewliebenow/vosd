@@ -6,7 +6,7 @@ ahash = { default-features = false, features = [
 anyhow = { default-features = false, features = [
   "backtrace",
   "std",
-], version = "=1.0.89" }
+], version = "=1.0.91" }
 clap = { default-features = false, features = [
   "color",
   "derive",
@@ -17,6 +17,7 @@ clap = { default-features = false, features = [
 ], version = "=4.5.20" }
 gtk = { default-features = false, version = "=0.18.1" }
 gtk-layer-shell = { default-features = false, version = "=0.8.1" }
+indoc = { default-features = false, version = "=2.0.5" }
 nameof = { default-features = false, version = "=1.2.2" }
 nix = { default-features = false, features = [
   "fs",
@@ -24,24 +25,166 @@ nix = { default-features = false, features = [
 ], version = "=0.29.0" }
 serde_json = { default-features = false, features = [
   "std",
-], version = "=1.0.128" }
+], version = "=1.0.132" }
+tokio = { default-features = false, features = [
+  "io-std",
+  "io-util",
+  "macros",
+  "net",
+  "process",
+  "rt",
+  "signal",
+  "sync",
+  "time",
+], version = "=1.41.0" }
+tokio-util = { default-features = false, version = "=0.7.12" }
 tracing = { default-features = false, version = "=0.1.40" }
 tracing-subscriber = { default-features = false, features = [
-  "ansi",
-  "env-filter",
   "fmt",
-  "smallvec",
   "std",
   "tracing-log",
 ], version = "=0.3.18" }
 
 [package]
+authors = [
+  "Andrew Liebenow <andrewliebenow@gmail.com>",
+]
 edition = "2021"
 license = "MIT"
 name = "vosd"
 version = "0.1.0"
 
+[profile.dev]
+# Save disk space
+debug = "line-tables-only"
+
 [profile.release]
 codegen-units = 1
 lto = "fat"
-strip = "symbols"
+strip = "debuginfo"
+
+[lints.clippy]
+absolute_paths = "warn"
+all = { level = "deny", priority = -1 }
+alloc_instead_of_core = "warn"
+allow_attributes = "deny"
+allow_attributes_without_reason = "warn"
+arithmetic_side_effects = "warn"
+as_conversions = "warn"
+as_underscore = "warn"
+assertions_on_result_states = "warn"
+collapsible_else_if = "allow"
+create_dir = "warn"
+dbg_macro = "warn"
+decimal_literal_representation = "allow"
+default_numeric_fallback = "warn"
+default_union_representation = "warn"
+deref_by_slicing = "deny"
+disallowed_script_idents = "warn"
+else_if_without_else = "allow"
+empty_drop = "warn"
+empty_enum_variants_with_brackets = "warn"
+enum_variant_names = "allow"
+error_impl_error = "warn"
+exhaustive_enums = "warn"
+exit = "deny"
+expect_used = "deny"
+explicit_deref_methods = "warn"
+filetype_is_file = "warn"
+float_cmp_const = "warn"
+fn_to_numeric_cast_any = "warn"
+format_push_string = "warn"
+get_first = "allow"
+get_unwrap = "warn"
+host_endian_bytes = "warn"
+if_then_some_else_none = "warn"
+indexing_slicing = "deny"
+infinite_loop = "deny"
+inline_asm_x86_att_syntax = "warn"
+inline_asm_x86_intel_syntax = "warn"
+integer_division = "warn"
+items_after_statements = "deny"
+iter_over_hash_type = "warn"
+large_futures = "deny"
+large_include_file = "warn"
+let_and_return = "warn"
+let_underscore_must_use = "warn"
+let_underscore_untyped = "warn"
+little_endian_bytes = "warn"
+lossy_float_literal = "warn"
+map_err_ignore = "warn"
+match_ref_pats = "allow"
+mem_forget = "warn"
+missing_assert_message = "warn"
+missing_asserts_for_indexing = "deny"
+missing_errors_doc = "allow"
+mixed_read_write_in_expression = "warn"
+mod_module_files = "warn"
+module_name_repetitions = "allow"
+modulo_arithmetic = "warn"
+multiple_inherent_impl = "warn"
+multiple_unsafe_ops_per_block = "warn"
+must_use_candidate = "allow"
+mutex_atomic = "warn"
+needless_borrowed_reference = "allow"
+needless_lifetimes = "deny"
+needless_raw_string_hashes = "deny"
+needless_raw_strings = "warn"
+no_effect_underscore_binding = "deny"
+non_ascii_literal = "warn"
+panic = "deny"
+panic_in_result_fn = "deny"
+partial_pub_fields = "warn"
+pattern_type_mismatch = "warn"
+pedantic = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+pub_use = "warn"
+rc_buffer = "warn"
+rc_mutex = "warn"
+redundant_type_annotations = "deny"
+ref_patterns = "allow"
+rest_pat_in_fully_bound_structs = "warn"
+same_name_method = "warn"
+semicolon_inside_block = "warn"
+shadow_reuse = "warn"
+shadow_same = "warn"
+shadow_unrelated = "warn"
+single_match_else = "allow"
+str_to_string = "deny"
+string_add = "warn"
+string_lit_chars_any = "warn"
+string_slice = "deny"
+string_to_string = "warn"
+struct_excessive_bools = "allow"
+struct_field_names = "allow"
+style = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+suspicious_xor_used_as_pow = "warn"
+tests_outside_test_module = "warn"
+todo = "deny"
+too_many_lines = "allow"
+try_err = "warn"
+undocumented_unsafe_blocks = "warn"
+unimplemented = "warn"
+unnecessary_box_returns = "deny"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
+unnecessary_self_imports = "deny"
+unnecessary_wraps = "deny"
+unneeded_field_pattern = "warn"
+unnested_or_patterns = "deny"
+unreachable = "warn"
+unreadable_literal = "deny"
+unseparated_literal_suffix = "warn"
+unwrap_in_result = "warn"
+unwrap_used = "warn"
+use_debug = "warn"
+verbose_file_reads = "warn"
+wildcard_enum_match_arm = "warn"
+
+[lints.rust]
+dropping_references = "deny"
+unused_imports = "deny"
+unused_labels = "deny"
+unused_must_use = "deny"
+unused_variables = "deny"

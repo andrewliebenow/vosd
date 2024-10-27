@@ -11,7 +11,7 @@ cargo install --git https://github.com/andrewliebenow/vosd
 
 ## Usage
 
-```Shell
+```
 ❯ vosd --help
 Render an OSD when the volume level is changed
 
@@ -33,4 +33,8 @@ You will likely want to run `vosd` as a daemon (`vosd --daemon`).
 
 ## License
 
-MIT License, see <a href="LICENSE">LICENSE</a> file
+Author: Andrew Liebenow
+
+Licensed under the MIT License, see <a href="./LICENSE">./LICENSE</a>.
+
+`vosd` depends on libraries written by other authors. See <a href="./Cargo.toml">./Cargo.toml</a> for its direct (i.e. non-transitive) dependencies.
