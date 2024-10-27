@@ -25,8 +25,7 @@ use std::process::Stdio;
 use std::rc::Rc;
 use std::time::{Duration, SystemTime};
 use std::{any, env, io};
-use std::{process, thread, time};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::runtime::{self, Handle};
 use tokio::signal::unix::{self, SignalKind};
@@ -107,9 +106,10 @@ fn start() -> anyhow::Result<()> {
         // Safety: TODO
         let fork_result = unsafe { unistd::fork() }?;
 
+        #[expect(clippy::absolute_paths, reason = "Conflicting imports")]
         #[expect(clippy::exit, reason = "Intentional")]
         if let ForkResult::Parent { .. } = fork_result {
-            process::exit(libc::EXIT_SUCCESS);
+            std::process::exit(libc::EXIT_SUCCESS);
         }
 
         unistd::setsid()?;
@@ -139,9 +139,10 @@ fn start() -> anyhow::Result<()> {
         // Safety: TODO
         let second_fork_result = unsafe { unistd::fork() }?;
 
+        #[expect(clippy::absolute_paths, reason = "Conflicting imports")]
         #[expect(clippy::exit, reason = "Intentional")]
         if let ForkResult::Parent { .. } = second_fork_result {
-            process::exit(libc::EXIT_SUCCESS);
+            std::process::exit(libc::EXIT_SUCCESS);
         }
     }
     /* #endregion */
@@ -149,7 +150,12 @@ fn start() -> anyhow::Result<()> {
     /* #region Setup */
     let system_time = SystemTime::now();
 
-    let duration = system_time.duration_since(time::UNIX_EPOCH)?;
+    let duration = {
+        #[expect(clippy::absolute_paths, reason = "Conflicting imports")]
+        {
+            system_time.duration_since(std::time::UNIX_EPOCH)?
+        }
+    };
 
     let duration_as_nanos = duration.as_nanos();
 
@@ -301,7 +307,7 @@ async fn start_inner(handle: &Handle) -> anyhow::Result<()> {
         }
     });
 
-    let application_thread_join_handle = thread::spawn(|| {
+    let application_thread_join_handle = handle.spawn_blocking(|| {
         gui_thread_function(
             pactl_data_unbounded_receiver,
             error_unbounded_sender,
@@ -312,22 +318,17 @@ async fn start_inner(handle: &Handle) -> anyhow::Result<()> {
     tracing::info!("Program running. Waiting for all tasks and threads to complete.");
 
     {
-        handle
-            .spawn_blocking(|| {
-                let join_handle_str = nameof::name_of!(application_thread_join_handle);
+        let join_handle_str = nameof::name_of!(application_thread_join_handle);
 
-                tracing::debug!(join_handle_str, "Joining `JoinHandle`");
+        tracing::debug!(join_handle_str, "Joining `JoinHandle`");
 
-                let application_thread_join_handle_join_result =
-                    application_thread_join_handle.join();
+        let application_thread_join_handle_result = application_thread_join_handle.await?;
 
-                tracing::debug!(
-                    ?application_thread_join_handle_join_result,
-                    join_handle_str,
-                    "Joined `JoinHandle`"
-                );
-            })
-            .await?;
+        tracing::debug!(
+            ?application_thread_join_handle_result,
+            join_handle_str,
+            "Joined `JoinHandle`"
+        );
     }
 
     {
@@ -497,8 +498,10 @@ async fn process_pactl_subscribe_stdout(
 ) -> anyhow::Result<()> {
     let mut mute_volume = Option::<(bool, Option<u64>)>::None;
 
+    let mut buffer = Vec::<u8>::new();
+
     let listen_for_string = {
-        let PactlData { index, .. } = gather_pactl_data()?;
+        let PactlData { index, .. } = gather_pactl_data(&mut buffer).await?;
 
         format!("Event 'change' on sink #{index}")
     };
@@ -526,7 +529,7 @@ async fn process_pactl_subscribe_stdout(
         if line == listen_for_string {
             tracing::debug!("Sending notification");
 
-            let pactl_data = gather_pactl_data()?;
+            let pactl_data = gather_pactl_data(&mut buffer).await?;
 
             let mute = pactl_data.mute;
             let volume = pactl_data.volume;
@@ -600,24 +603,33 @@ fn close_all_windows(vosd_windows: &mut Vec<VosdWindow>) {
     vosd_windows.clear();
 }
 
-fn gather_pactl_data() -> anyhow::Result<PactlData> {
+async fn gather_pactl_data(buffer: &mut Vec<u8>) -> anyhow::Result<PactlData> {
     for it in 0_i32..1_024_i32 {
-        let mut child = process::Command::new("pactl")
+        let mut child = Command::new("pactl")
             .args(["--format=json", "list", "sinks"])
-            .stdout(process::Stdio::piped())
+            .stdout(Stdio::piped())
             .spawn()?;
 
-        let value = serde_json::from_reader::<_, Value>(child.stdout.as_mut().to_result()?)?;
+        let child_stdout = child.stdout.as_mut().to_result()?;
+
+        buffer.clear();
+
+        child_stdout.read_to_end(buffer).await?;
+
+        let value = serde_json::from_slice::<Value>(buffer.as_slice())?;
 
         // Avoid zombie processes
-        child.wait()?;
+        child.wait().await?;
 
         let array = value.as_array().to_result()?;
 
         if array.is_empty() {
             tracing::warn!(it, "\"{}\" is empty", nameof::name_of!(array));
 
-            thread::sleep(RETRY_DURATION);
+            #[expect(clippy::absolute_paths, reason = "Conflicting imports")]
+            {
+                tokio::time::sleep(RETRY_DURATION).await;
+            }
 
             continue;
         }
@@ -672,7 +684,7 @@ fn gather_pactl_data() -> anyhow::Result<PactlData> {
 
         let mut a_hash_set = AHashSet::<u64>::with_capacity(volume_object.len());
 
-        for (_, va) in volume_object {
+        for va in volume_object.values() {
             let ma = va.as_object().to_result()?;
 
             let us = ma.get("value").to_result()?.as_u64().to_result()?;
