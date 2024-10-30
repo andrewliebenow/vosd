@@ -1,0 +1,7 @@
+chain_width = 40
+edition = "2021"
+fn_call_width = 40
+fn_params_layout = "Vertical"
+imports_granularity = "Crate"
+max_width = 200
+single_line_if_else_max_width = 40

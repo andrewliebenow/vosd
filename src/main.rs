@@ -1,41 +1,42 @@
 use ahash::AHashSet;
 use clap::Parser;
-use gtk::gdk::{Monitor, Screen};
-use gtk::gio::ApplicationFlags;
-use gtk::glib::{SignalHandlerId, SourceId};
 use gtk::{
-    gdk::{self},
-    glib::{self},
+    gdk::{self, Monitor, Screen},
+    gio::ApplicationFlags,
+    glib::{self, SignalHandlerId, SourceId},
     prelude::{ApplicationExt, ApplicationExtManual},
-    traits::{
-        ContainerExt, CssProviderExt, GtkWindowExt, ProgressBarExt, StyleContextExt, WidgetExt,
-    },
+    traits::{ContainerExt, CssProviderExt, GtkWindowExt, ProgressBarExt, StyleContextExt, WidgetExt},
+    Align, Application, ApplicationWindow, CssProvider, IconSize, Image, Label, Orientation, ProgressBar, StyleContext,
 };
-use gtk::{Application, ApplicationWindow, CssProvider, StyleContext};
 use gtk_layer_shell::LayerShell;
-use nix::fcntl::OFlag;
-use nix::sys::stat::Mode;
-use nix::unistd::{self, ForkResult};
-use nix::{fcntl, libc};
+use nix::{
+    fcntl,
+    fcntl::OFlag,
+    libc,
+    sys::stat::Mode,
+    unistd::{self, ForkResult},
+};
 use serde_json::{Map, Value};
-use std::cell::{Cell, RefCell};
-use std::fs::File;
-use std::io::Write;
-use std::process::Stdio;
-use std::rc::Rc;
-use std::time::{Duration, SystemTime};
-use std::{any, env, io};
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
-use tokio::process::{Child, Command};
-use tokio::runtime::{self, Handle};
-use tokio::signal::unix::{self, SignalKind};
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use std::{
+    any,
+    cell::{Cell, RefCell},
+    env,
+    fs::File,
+    io::{self, Write},
+    process::Stdio,
+    rc::Rc,
+    time::{Duration, SystemTime},
+};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncReadExt, BufReader},
+    process::{Child, Command},
+    runtime::{self, Handle},
+    signal::unix::{self, SignalKind},
+    sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
+};
 use tokio_util::sync::CancellationToken;
-use tracing::level_filters::LevelFilter;
-use tracing::Level;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{fmt, Layer};
+use tracing::{level_filters::LevelFilter, Level};
+use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 const CSS_CSS_SLICE: &[u8] = include_bytes!("./css.css");
 
@@ -43,8 +44,7 @@ const CRATE: &str = "vosd";
 const FIRST_LINE: &str = ">>>";
 const MUTED: &str = "muted";
 const RETRY_DURATION: Duration = Duration::from_millis(10_u64);
-const SEPARATOR: &str =
-    "================================================================================";
+const SEPARATOR: &str = "================================================================================";
 const TIMEOUT_DURATION: Duration = Duration::from_secs(2_u64);
 
 /// Render an OSD when the volume level is changed
@@ -128,7 +128,11 @@ fn start() -> anyhow::Result<()> {
 
         {
             anyhow::ensure!(
-                fcntl::open("/dev/null", OFlag::O_RDWR, Mode::empty())? == libc::STDIN_FILENO
+                fcntl::open(
+                    "/dev/null",
+                    OFlag::O_RDWR,
+                    Mode::empty()
+                )? == libc::STDIN_FILENO
             );
 
             anyhow::ensure!(unistd::dup(libc::STDIN_FILENO)? == libc::STDOUT_FILENO);
@@ -161,7 +165,9 @@ fn start() -> anyhow::Result<()> {
 
     let mut path_buf = env::temp_dir();
 
-    path_buf.push(format!("vosd{duration_as_nanos}"));
+    path_buf.push(format!(
+        "vosd---6f983a64f4c2705fb802aa8ed3942f23---{duration_as_nanos}"
+    ));
 
     let path_buf_path = path_buf.as_path();
 
@@ -185,7 +191,7 @@ fn start() -> anyhow::Result<()> {
             .with(
                 fmt::layer()
                     .with_writer(file)
-                    .with_filter(LevelFilter::from_level(Level::WARN)),
+                    .with_filter(LevelFilter::from_level(Level::INFO)),
             )
             .init();
 
@@ -253,11 +259,9 @@ async fn start_inner(handle: &Handle) -> anyhow::Result<()> {
         })
     };
 
-    let (error_unbounded_sender, mut error_unbounded_receiver) =
-        mpsc::unbounded_channel::<anyhow::Error>();
+    let (error_unbounded_sender, mut error_unbounded_receiver) = mpsc::unbounded_channel::<anyhow::Error>();
 
-    let (pactl_data_unbounded_sender, pactl_data_unbounded_receiver) =
-        mpsc::unbounded_channel::<PactlData>();
+    let (pactl_data_unbounded_sender, pactl_data_unbounded_receiver) = mpsc::unbounded_channel::<PactlData>();
 
     let cancellation_token_clone_b = cancellation_token_clone_a.clone();
 
@@ -367,6 +371,8 @@ fn gui_thread_function(
 ) -> anyhow::Result<i32> {
     const FOR_RUN_WITH_ARGS: [&str; 0_usize] = [];
 
+    glib::log_set_default_handler(glib::rust_log_handler);
+
     gtk::init()?;
 
     let css_provider = CssProvider::new();
@@ -388,14 +394,21 @@ fn gui_thread_function(
         ApplicationFlags::FLAGS_NONE,
     );
 
-    let vosd_windows = Rc::new(RefCell::new(Vec::<VosdWindow>::new()));
-
     let application_clone = application.clone();
+
+    let vosd_windows = Rc::new(RefCell::new(Vec::<VosdWindow>::new()));
 
     let vosd_windows_clone = vosd_windows.clone();
 
-    let _: glib::SignalHandlerId = application
-        .connect_activate(move |ap| connect_activate_function(ap, &vosd_windows, &display));
+    let _: SignalHandlerId = application_clone.connect_activate(move |ap| connect_activate_function(ap, &vosd_windows, &display));
+
+    // There are some short periods in which the number of windows may be zero.
+    // In this case, the main loop will stop and the `GApplication` shuts down.
+    // Simply spawning a future using `glib::spawn_future_local` does not prevent this from happening.
+    // Explicitly keep the main loop running with an `ApplicationHoldGuard` so the application survives these short periods in which the window count is 0.
+    let application_hold_guard = application.hold();
+
+    let cancellation_token_clone = cancellation_token.clone();
 
     let _z = glib::spawn_future_local(async move {
         loop {
@@ -421,7 +434,10 @@ fn gui_thread_function(
             for vo in ref_mut.iter() {
                 if let Err(er) = show_volume_change_notification(vo, &pa) {
                     if let Err(se) = error_unbounded_sender.send(er) {
-                        tracing::error!(?se, "Unable to send `Error` through `Error` channel");
+                        tracing::error!(
+                            ?se,
+                            "Unable to send `Error` through `Error` channel"
+                        );
                     }
 
                     continue;
@@ -429,11 +445,22 @@ fn gui_thread_function(
             }
         }
 
-        application_clone.quit();
+        tracing::info!("Cancellation token was cancelled, quitting application and then finishing UI updating task");
+
+        drop(application_hold_guard);
+
+        application.quit();
     });
 
     // Do not pass arguments into `GApplication`
-    let exit_code = application.run_with_args(&FOR_RUN_WITH_ARGS);
+    let exit_code = application_clone.run_with_args(&FOR_RUN_WITH_ARGS);
+
+    tracing::info!("`run_with_args` returned (application has stopped)");
+
+    // TODO
+    // Hacky
+    // In case the application stopped on its own, stop the parent thread. Should not happen.
+    cancellation_token_clone.cancel();
 
     let exit_code_value = exit_code.value();
 
@@ -445,50 +472,54 @@ fn connect_activate_function(
     vosd_windows: &Rc<RefCell<Vec<VosdWindow>>>,
     display: &gdk::Display,
 ) {
-    initialize_windows(&mut vosd_windows.borrow_mut(), application, display);
+    initialize_windows(
+        &mut vosd_windows.borrow_mut(),
+        application,
+        display,
+    );
 
-    {
+    let _connect_opened_signal_handler_id: SignalHandlerId = {
         let application_to_owned = application.to_owned();
         let vosd_windows_clone = vosd_windows.clone();
 
-        let _: SignalHandlerId = display.connect_opened(move |di| {
+        display.connect_opened(move |di| {
             let mut ref_mut = vosd_windows_clone.borrow_mut();
 
             initialize_windows(&mut ref_mut, &application_to_owned, di);
-        });
-    }
+        })
+    };
 
-    {
+    let _connect_closed_signal_handler_id: SignalHandlerId = {
         let vosd_windows_clone = vosd_windows.clone();
 
-        let _: SignalHandlerId = display.connect_closed(move |_, _| {
+        display.connect_closed(move |_, _| {
             let mut ref_mut = vosd_windows_clone.borrow_mut();
 
             close_all_windows(&mut ref_mut);
-        });
-    }
+        })
+    };
 
-    {
+    let _connect_monitor_added_signal_handler_id: SignalHandlerId = {
         let application_rc_clone = application.clone();
         let vosd_windows_clone = vosd_windows.clone();
 
-        let _: SignalHandlerId = display.connect_monitor_added(move |_, mo| {
+        display.connect_monitor_added(move |_, mo| {
             let mut ref_mut = vosd_windows_clone.borrow_mut();
 
             add_window(&mut ref_mut, &application_rc_clone, mo);
-        });
-    }
+        })
+    };
 
-    {
+    let _connect_monitor_removed_signal_handler_id: SignalHandlerId = {
         let application_rc_clone = application.clone();
         let vosd_windows_clone = vosd_windows.clone();
 
-        let _: SignalHandlerId = display.connect_monitor_removed(move |di, _| {
+        display.connect_monitor_removed(move |di, _| {
             let mut ref_mut = vosd_windows_clone.borrow_mut();
 
             initialize_windows(&mut ref_mut, &application_rc_clone, di);
-        });
-    }
+        })
+    };
 }
 
 async fn process_pactl_subscribe_stdout(
@@ -549,10 +580,15 @@ async fn process_pactl_subscribe_stdout(
     }
 }
 
-fn add_window(vosd_windows: &mut Vec<VosdWindow>, application: &Application, monitor: &Monitor) {
-    let application_window = gtk::ApplicationWindow::new(application);
+fn add_window(
+    vosd_windows: &mut Vec<VosdWindow>,
+    application: &Application,
+    monitor: &Monitor,
+) {
+    let application_window = ApplicationWindow::new(application);
 
-    // TODO Class
+    // TODO
+    // Class
     application_window
         .style_context()
         .add_class(gtk::STYLE_CLASS_OSD);
@@ -564,7 +600,7 @@ fn add_window(vosd_windows: &mut Vec<VosdWindow>, application: &Application, mon
     application_window.set_monitor(monitor);
 
     let box_x = {
-        let bo = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        let bo = gtk::Box::new(Orientation::Horizontal, 12);
         bo.style_context().add_class("box");
 
         bo
@@ -624,7 +660,11 @@ async fn gather_pactl_data(buffer: &mut Vec<u8>) -> anyhow::Result<PactlData> {
         let array = value.as_array().to_result()?;
 
         if array.is_empty() {
-            tracing::warn!(it, "\"{}\" is empty", nameof::name_of!(array));
+            tracing::warn!(
+                it,
+                "\"{}\" is empty",
+                nameof::name_of!(array)
+            );
 
             #[expect(clippy::absolute_paths, reason = "Conflicting imports")]
             {
@@ -687,7 +727,11 @@ async fn gather_pactl_data(buffer: &mut Vec<u8>) -> anyhow::Result<PactlData> {
         for va in volume_object.values() {
             let ma = va.as_object().to_result()?;
 
-            let us = ma.get("value").to_result()?.as_u64().to_result()?;
+            let us = ma
+                .get("value")
+                .to_result()?
+                .as_u64()
+                .to_result()?;
 
             a_hash_set.insert(us);
         }
@@ -703,21 +747,19 @@ async fn gather_pactl_data(buffer: &mut Vec<u8>) -> anyhow::Result<PactlData> {
             None
         };
 
-        return Ok(PactlData {
-            base_volume,
-            index,
-            mute,
-            volume,
-        });
+        return Ok(PactlData { base_volume, index, mute, volume });
     }
 
     anyhow::bail!("Could not list sinks");
 }
 
-fn create_progress_bar(fraction: f64, apply_inactive_class: bool) -> gtk::ProgressBar {
-    let progress_bar = gtk::ProgressBar::new();
+fn create_progress_bar(
+    fraction: f64,
+    apply_inactive_class: bool,
+) -> ProgressBar {
+    let progress_bar = ProgressBar::new();
     progress_bar.set_fraction(fraction);
-    progress_bar.set_valign(gtk::Align::Center);
+    progress_bar.set_valign(Align::Center);
 
     if apply_inactive_class {
         progress_bar
@@ -728,8 +770,8 @@ fn create_progress_bar(fraction: f64, apply_inactive_class: bool) -> gtk::Progre
     progress_bar
 }
 
-fn create_image(icon_name: &str) -> gtk::Image {
-    gtk::Image::from_icon_name(Some(icon_name), gtk::IconSize::Dnd)
+fn create_image(icon_name: &str) -> Image {
+    Image::from_icon_name(Some(icon_name), IconSize::Dnd)
 }
 
 // TODO
@@ -754,11 +796,7 @@ fn show_volume_change_notification(
     if let Some(us) = pactl_data.volume {
         let mute = pactl_data.mute;
 
-        #[expect(
-            clippy::as_conversions,
-            clippy::cast_precision_loss,
-            reason = "Unimportant"
-        )]
+        #[expect(clippy::as_conversions, clippy::cast_precision_loss, reason = "Unimportant")]
         let volume_fraction = (us as f64) / (pactl_data.base_volume as f64);
 
         let icon_segment = match (mute, volume_fraction) {
@@ -782,23 +820,22 @@ fn show_volume_change_notification(
 
         let volume_percent = volume_fraction * 100.0_f64;
 
-        #[expect(
-            clippy::as_conversions,
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "Unimportant"
-        )]
+        #[expect(clippy::as_conversions, clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "Unimportant")]
         let volume_percent_integer = volume_percent.round() as u8;
 
         let label_string = format!("{volume_percent_integer}%");
 
-        let label = gtk::Label::new(Some(label_string.as_str()));
+        let label = Label::new(Some(label_string.as_str()));
 
         // "min-width" prevents a width change when going from 9% to 10% or from 99% to 100%
-        label.style_context().add_class("percentageLabel");
+        label
+            .style_context()
+            .add_class("percentageLabel");
 
         if mute {
-            label.style_context().add_class("percentageLabel-inactive");
+            label
+                .style_context()
+                .add_class("percentageLabel-inactive");
         }
 
         box_x.add(&label);
@@ -808,7 +845,7 @@ fn show_volume_change_notification(
 
         box_x.add(&image);
 
-        let label = gtk::Label::new(Some("Volume is not even"));
+        let label = Label::new(Some("Volume is not even"));
 
         box_x.add(&label);
         /* #endregion */
@@ -848,6 +885,11 @@ pub trait OptionToResultExt<T> {
 
 impl<T> OptionToResultExt<T> for Option<T> {
     fn to_result(self) -> anyhow::Result<T> {
-        self.ok_or_else(|| anyhow::anyhow!("Value is missing (type `{}`)", any::type_name::<T>()))
+        self.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Value is missing (type `{}`)",
+                any::type_name::<T>()
+            )
+        })
     }
 }

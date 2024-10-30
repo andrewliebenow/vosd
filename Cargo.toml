@@ -15,6 +15,9 @@ clap = { default-features = false, features = [
   "suggestions",
   "usage",
 ], version = "=4.5.20" }
+glib = { default-features = false, features = [
+  "log",
+], version = "=0.18.5" }
 gtk = { default-features = false, version = "=0.18.1" }
 gtk-layer-shell = { default-features = false, version = "=0.8.1" }
 indoc = { default-features = false, version = "=2.0.5" }
