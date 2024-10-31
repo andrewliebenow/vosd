@@ -1,10 +1,9 @@
-use ahash::AHashSet;
 use clap::Parser;
 use gtk::{
     gdk::{self, Monitor, Screen},
     gio::ApplicationFlags,
     glib::{self, SignalHandlerId, SourceId},
-    prelude::{ApplicationExt, ApplicationExtManual},
+    prelude::{ApplicationExt, ApplicationExtManual, ImageExt, LabelExt},
     traits::{ContainerExt, CssProviderExt, GtkWindowExt, ProgressBarExt, StyleContextExt, WidgetExt},
     Align, Application, ApplicationWindow, CssProvider, IconSize, Image, Label, Orientation, ProgressBar, StyleContext,
 };
@@ -16,7 +15,6 @@ use nix::{
     sys::stat::Mode,
     unistd::{self, ForkResult},
 };
-use serde_json::{Map, Value};
 use std::{
     any,
     cell::{Cell, RefCell},
@@ -37,12 +35,13 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tracing::{level_filters::LevelFilter, Level};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Layer};
+use types::{Root, RootElement};
 
 const CSS_CSS_SLICE: &[u8] = include_bytes!("./css.css");
 
 const CRATE: &str = "vosd";
 const FIRST_LINE: &str = ">>>";
-const MUTED: &str = "muted";
+const MUTED_ICON_NAME: &str = "audio-volume-muted-symbolic";
 const RETRY_DURATION: Duration = Duration::from_millis(10_u64);
 const SEPARATOR: &str = "================================================================================";
 const TIMEOUT_DURATION: Duration = Duration::from_secs(2_u64);
@@ -57,11 +56,15 @@ struct VosdArgs {
 }
 
 struct VosdWindow {
-    application_window: Rc<ApplicationWindow>,
-    box_x: gtk::Box,
+    application_window: ApplicationWindow,
+    balanced_channels_box: gtk::Box,
+    balanced_channels_widgets: BalancedChannelsWidgets,
+    last_volume_change_notification_had_not_balanced_channels: bool,
+    not_balanced_channels_box: gtk::Box,
     timeout: Rc<Cell<Option<SourceId>>>,
 }
 
+#[derive(Debug)]
 struct PactlData {
     base_volume: u64,
     index: u64,
@@ -427,11 +430,11 @@ fn gui_thread_function(
                 break;
             };
 
-            let ref_mut = vosd_windows_clone.borrow_mut();
+            let mut ref_mut = vosd_windows_clone.borrow_mut();
 
             // TODO
             // Do more work outside of this loop
-            for vo in ref_mut.iter() {
+            for vo in ref_mut.iter_mut() {
                 if let Err(er) = show_volume_change_notification(vo, &pa) {
                     if let Err(se) = error_unbounded_sender.send(er) {
                         tracing::error!(
@@ -527,7 +530,7 @@ async fn process_pactl_subscribe_stdout(
     unbounded_sender: UnboundedSender<PactlData>,
     cancellation_token: &CancellationToken,
 ) -> anyhow::Result<()> {
-    let mut mute_volume = Option::<(bool, Option<u64>)>::None;
+    let mut mute_and_volume = Option::<(bool, Option<u64>)>::None;
 
     let mut buffer = Vec::<u8>::new();
 
@@ -558,22 +561,31 @@ async fn process_pactl_subscribe_stdout(
         };
 
         if line == listen_for_string {
-            tracing::debug!("Sending notification");
+            tracing::debug!("Received 'change' event on sink being monitored");
 
             let pactl_data = gather_pactl_data(&mut buffer).await?;
 
             let mute = pactl_data.mute;
             let volume = pactl_data.volume;
 
-            let call_send = if let Some((old_mute, old_volume)) = mute_volume {
-                mute != old_mute || volume != old_volume
+            let call_send = if let Some((old_mute, old_volume)) = mute_and_volume {
+                if mute == old_mute {
+                    match (volume, old_volume) {
+                        (Some(us), Some(usi)) => us != usi,
+                        _ => true,
+                    }
+                } else {
+                    true
+                }
             } else {
                 true
             };
 
-            mute_volume = Some((mute, volume));
+            mute_and_volume = Some((mute, volume));
 
             if call_send {
+                tracing::debug!("Mute status or volume level changed, sending notification");
+
                 unbounded_sender.send(pactl_data)?;
             }
         }
@@ -585,7 +597,43 @@ fn add_window(
     application: &Application,
     monitor: &Monitor,
 ) {
+    let get_box = || {
+        let bo = gtk::Box::new(Orientation::Horizontal, 12_i32);
+
+        bo.style_context().add_class("box");
+
+        bo
+    };
+
+    let root_box = gtk::Box::new(Orientation::Vertical, 0_i32);
+    root_box.set_visible(true);
+
+    let (balanced_channels_box, balanced_channels_widgets) = {
+        let bo = get_box();
+
+        let ba = construct_balanced_channels_widgets(&bo);
+
+        root_box.add(&bo);
+
+        (bo, ba)
+    };
+
+    let not_balanced_channels_box = {
+        let bo = get_box();
+
+        construct_not_balanced_channels_widgets(&bo);
+
+        root_box.add(&bo);
+
+        bo
+    };
+
     let application_window = ApplicationWindow::new(application);
+    application_window.init_layer_shell();
+    // Display above all other windows, including full-screen windows
+    // Use of gtk_layer_shell follows https://github.com/ErikReider/SwayOSD
+    application_window.set_layer(gtk_layer_shell::Layer::Overlay);
+    application_window.set_monitor(monitor);
 
     // TODO
     // Class
@@ -593,24 +641,14 @@ fn add_window(
         .style_context()
         .add_class(gtk::STYLE_CLASS_OSD);
 
-    application_window.init_layer_shell();
-    // Display above all other windows, including full-screen windows
-    // Use of gtk_layer_shell follows https://github.com/ErikReider/SwayOSD
-    application_window.set_layer(gtk_layer_shell::Layer::Overlay);
-    application_window.set_monitor(monitor);
-
-    let box_x = {
-        let bo = gtk::Box::new(Orientation::Horizontal, 12);
-        bo.style_context().add_class("box");
-
-        bo
-    };
-
-    application_window.add(&box_x);
+    application_window.add(&root_box);
 
     let vosd_window = VosdWindow {
-        application_window: Rc::new(application_window),
-        box_x,
+        application_window,
+        balanced_channels_box,
+        balanced_channels_widgets,
+        last_volume_change_notification_had_not_balanced_channels: false,
+        not_balanced_channels_box,
         timeout: Rc::new(Cell::new(None)),
     };
 
@@ -652,18 +690,16 @@ async fn gather_pactl_data(buffer: &mut Vec<u8>) -> anyhow::Result<PactlData> {
 
         child_stdout.read_to_end(buffer).await?;
 
-        let value = serde_json::from_slice::<Value>(buffer.as_slice())?;
+        let root = serde_json::from_slice::<Root>(buffer.as_slice())?;
 
         // Avoid zombie processes
         child.wait().await?;
 
-        let array = value.as_array().to_result()?;
-
-        if array.is_empty() {
+        if root.is_empty() {
             tracing::warn!(
                 it,
                 "\"{}\" is empty",
-                nameof::name_of!(array)
+                nameof::name_of!(root)
             );
 
             #[expect(clippy::absolute_paths, reason = "Conflicting imports")]
@@ -674,181 +710,214 @@ async fn gather_pactl_data(buffer: &mut Vec<u8>) -> anyhow::Result<PactlData> {
             continue;
         }
 
-        let mut matching_element_object_option = Option::<&Map<String, Value>>::None;
-
-        for va in array {
-            let object = va.as_object().to_result()?;
-
-            let name_value = object.get("name").to_result()?;
-
-            let name = name_value.as_str().to_result()?;
+        for ro in root {
+            let RootElement {
+                base_volume,
+                index,
+                mute,
+                name,
+                volume,
+            } = ro;
 
             if name.starts_with("alsa_output.") {
-                matching_element_object_option = Some(object);
+                let mut different_volume_values_found = false;
+                let mut last_volume_value = Option::<u64>::None;
 
-                break;
+                for va in volume.values() {
+                    let ma = va.as_object().to_result()?;
+
+                    let us = ma
+                        .get("value")
+                        .to_result()?
+                        .as_u64()
+                        .to_result()?;
+
+                    if let Some(usi) = last_volume_value {
+                        if us != usi {
+                            different_volume_values_found = true;
+
+                            break;
+                        }
+                    }
+
+                    last_volume_value = Some(us);
+                }
+
+                let volume_option = if different_volume_values_found {
+                    None
+                } else {
+                    if last_volume_value.is_none() {
+                        tracing::warn!("\"pactl\" did not report any volume values for the default output sink");
+                    }
+
+                    last_volume_value
+                };
+
+                return Ok(PactlData {
+                    base_volume: base_volume.value,
+                    index,
+                    mute,
+                    volume: volume_option,
+                });
             }
         }
 
-        let matching_element_object = matching_element_object_option.to_result()?;
-
-        let index = matching_element_object
-            .get("index")
-            .to_result()?
-            .as_u64()
-            .to_result()?;
-
-        let base_volume_object = matching_element_object
-            .get("base_volume")
-            .to_result()?
-            .as_object()
-            .to_result()?;
-
-        let mute = matching_element_object
-            .get("mute")
-            .to_result()?
-            .as_bool()
-            .to_result()?;
-
-        let base_volume = base_volume_object
-            .get("value")
-            .to_result()?
-            .as_u64()
-            .to_result()?;
-
-        let volume_object = matching_element_object
-            .get("volume")
-            .to_result()?
-            .as_object()
-            .to_result()?;
-
-        let mut a_hash_set = AHashSet::<u64>::with_capacity(volume_object.len());
-
-        for va in volume_object.values() {
-            let ma = va.as_object().to_result()?;
-
-            let us = ma
-                .get("value")
-                .to_result()?
-                .as_u64()
-                .to_result()?;
-
-            a_hash_set.insert(us);
-        }
-
-        let mut into_iter = a_hash_set.into_iter();
-
-        let volume = if let Some(us) = into_iter.next() {
-            match into_iter.next() {
-                Some(_) => None,
-                None => Some(us),
-            }
-        } else {
-            None
-        };
-
-        return Ok(PactlData { base_volume, index, mute, volume });
+        anyhow::bail!("Could not identify default output sink");
     }
 
     anyhow::bail!("Could not list sinks");
-}
-
-fn create_progress_bar(
-    fraction: f64,
-    apply_inactive_class: bool,
-) -> ProgressBar {
-    let progress_bar = ProgressBar::new();
-    progress_bar.set_fraction(fraction);
-    progress_bar.set_valign(Align::Center);
-
-    if apply_inactive_class {
-        progress_bar
-            .style_context()
-            .add_class("progressBar-inactive");
-    }
-
-    progress_bar
 }
 
 fn create_image(icon_name: &str) -> Image {
     Image::from_icon_name(Some(icon_name), IconSize::Dnd)
 }
 
-// TODO
-// Reuse widgets instead of removing
+struct BalancedChannelsWidgets {
+    image: Image,
+    label: Label,
+    progress_bar: ProgressBar,
+}
+
+fn construct_balanced_channels_widgets(box_x: &gtk::Box) -> BalancedChannelsWidgets {
+    let image = create_image(MUTED_ICON_NAME);
+    image.set_visible(true);
+
+    box_x.add(&image);
+
+    let progress_bar = ProgressBar::new();
+    progress_bar.set_fraction(0_f64);
+    progress_bar.set_valign(Align::Center);
+    progress_bar.set_visible(true);
+
+    box_x.add(&progress_bar);
+
+    let label = Label::new(None);
+    label.set_visible(true);
+
+    // "min-width" prevents a width change when going from 9% to 10% or from 99% to 100%
+    label
+        .style_context()
+        .add_class("percentageLabel");
+
+    box_x.add(&label);
+
+    BalancedChannelsWidgets { image, label, progress_bar }
+}
+
+// Handle broken volume
+fn construct_not_balanced_channels_widgets(box_x: &gtk::Box) {
+    let image = create_image("dialog-question-symbolic");
+    image.set_visible(true);
+
+    box_x.add(&image);
+
+    let label = Label::new(Some(
+        "Channels have different volume levels",
+    ));
+    label.set_visible(true);
+
+    box_x.add(&label);
+}
+
 fn show_volume_change_notification(
-    vosd_window: &VosdWindow,
+    vosd_window: &mut VosdWindow,
     pactl_data: &PactlData,
 ) -> anyhow::Result<()> {
     let VosdWindow {
         ref application_window,
-        ref box_x,
+        ref balanced_channels_box,
+        ref balanced_channels_widgets,
+        ref mut last_volume_change_notification_had_not_balanced_channels,
+        ref not_balanced_channels_box,
         ref timeout,
     } = *vosd_window;
 
-    /* #region Delete existing widgets */
-    for wi in box_x.children() {
-        box_x.remove(&wi);
-    }
-    /* #endregion */
+    let PactlData { base_volume, mute, volume, .. } = *pactl_data;
 
     /* #region Add new widgets */
-    if let Some(us) = pactl_data.volume {
-        let mute = pactl_data.mute;
+    if let Some(us) = volume {
+        if *last_volume_change_notification_had_not_balanced_channels {
+            application_window.hide();
 
-        #[expect(clippy::as_conversions, clippy::cast_precision_loss, reason = "Unimportant")]
-        let volume_fraction = (us as f64) / (pactl_data.base_volume as f64);
+            not_balanced_channels_box.hide();
+        }
 
-        let icon_segment = match (mute, volume_fraction) {
-            (true, _) => MUTED,
-            (false, fs) if fs == 0.0_f64 => MUTED,
-            (false, fs) if fs > 0.0_f64 && fs <= 0.333_f64 => "low",
-            (false, fs) if fs > 0.333_f64 && fs <= 0.666_f64 => "medium",
-            (false, fs) if fs > 0.666_f64 => "high",
+        let &&BalancedChannelsWidgets {
+            ref image,
+            ref label,
+            ref progress_bar,
+        } = &balanced_channels_widgets;
+
+        let volume_fraction = {
+            #[expect(clippy::as_conversions, clippy::cast_precision_loss, reason = "Unimportant")]
+            {
+                (us as f64) / (base_volume as f64)
+            }
+        };
+
+        let icon_name = match (mute, volume_fraction) {
+            (true, _) => MUTED_ICON_NAME,
+            (false, fs) if fs == 0.0_f64 => MUTED_ICON_NAME,
+            (false, fs) if fs > 0.0_f64 && fs <= 0.333_f64 => "audio-volume-low-symbolic",
+            (false, fs) if fs > 0.333_f64 && fs <= 0.666_f64 => "audio-volume-medium-symbolic",
+            (false, fs) if fs > 0.666_f64 => "audio-volume-high-symbolic",
             _ => anyhow::bail!("This should be unreachable"),
         };
 
-        let icon_name = format!("audio-volume-{icon_segment}-symbolic");
+        image.set_icon_name(Some(icon_name));
 
-        let image = create_image(&icon_name);
+        progress_bar.set_fraction(volume_fraction);
 
-        box_x.add(&image);
+        {
+            const PROGRESS_BAR_INACTIVE_CLASS: &str = "progressBar-inactive";
 
-        let progress_bar = create_progress_bar(volume_fraction, mute);
+            let style_context = progress_bar.style_context();
 
-        box_x.add(&progress_bar);
+            if mute {
+                style_context.add_class(PROGRESS_BAR_INACTIVE_CLASS);
+            } else {
+                style_context.remove_class(PROGRESS_BAR_INACTIVE_CLASS);
+            }
+        }
 
         let volume_percent = volume_fraction * 100.0_f64;
 
-        #[expect(clippy::as_conversions, clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "Unimportant")]
-        let volume_percent_integer = volume_percent.round() as u8;
+        let volume_percent_integer = {
+            #[expect(clippy::as_conversions, clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "Unimportant")]
+            {
+                volume_percent.round() as u8
+            }
+        };
 
         let label_string = format!("{volume_percent_integer}%");
 
-        let label = Label::new(Some(label_string.as_str()));
+        label.set_text(label_string.as_str());
 
-        // "min-width" prevents a width change when going from 9% to 10% or from 99% to 100%
-        label
-            .style_context()
-            .add_class("percentageLabel");
+        {
+            const PERCENTAGE_LABEL_INACTIVE_CLASS: &str = "percentageLabel-inactive";
 
-        if mute {
-            label
-                .style_context()
-                .add_class("percentageLabel-inactive");
+            let style_context = label.style_context();
+
+            if mute {
+                style_context.add_class(PERCENTAGE_LABEL_INACTIVE_CLASS);
+            } else {
+                style_context.remove_class(PERCENTAGE_LABEL_INACTIVE_CLASS);
+            }
         }
 
-        box_x.add(&label);
+        balanced_channels_box.set_visible(true);
+
+        *last_volume_change_notification_had_not_balanced_channels = false;
     } else {
-        /* #region Handle broken volume */
-        let image = create_image("dialog-question-symbolic");
+        if !(*last_volume_change_notification_had_not_balanced_channels) {
+            application_window.hide();
 
-        box_x.add(&image);
+            balanced_channels_box.hide();
+        }
 
-        let label = Label::new(Some("Volume is not even"));
+        not_balanced_channels_box.set_visible(true);
 
-        box_x.add(&label);
-        /* #endregion */
+        *last_volume_change_notification_had_not_balanced_channels = true;
     }
     /* #endregion */
 
@@ -874,7 +943,7 @@ fn show_volume_change_notification(
     }
     /* #endregion */
 
-    application_window.show_all();
+    application_window.set_visible(true);
 
     Ok(())
 }
@@ -891,5 +960,30 @@ impl<T> OptionToResultExt<T> for Option<T> {
                 any::type_name::<T>()
             )
         })
+    }
+}
+
+// Generated with https://app.quicktype.io
+// Customized and unnecessary fields removed
+mod types {
+    use serde::{Deserialize, Serialize};
+    use serde_json::{Map, Value};
+
+    pub type Root = Vec<RootElement>;
+
+    #[derive(Serialize, Deserialize)]
+    pub struct RootElement {
+        pub base_volume: BaseVolume,
+        pub index: u64,
+        pub mute: bool,
+        pub name: String,
+        pub volume: Map<String, Value>,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct BaseVolume {
+        pub db: String,
+        pub value_percent: String,
+        pub value: u64,
     }
 }

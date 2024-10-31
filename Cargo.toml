@@ -1,57 +1,56 @@
 [dependencies]
 ahash = { default-features = false, features = [
-  "runtime-rng",
-  "std",
+	"runtime-rng",
+	"std",
 ], version = "=0.8.11" }
 anyhow = { default-features = false, features = [
-  "backtrace",
-  "std",
+	"backtrace",
+	"std",
 ], version = "=1.0.91" }
 clap = { default-features = false, features = [
-  "color",
-  "derive",
-  "help",
-  "std",
-  "suggestions",
-  "usage",
+	"color",
+	"derive",
+	"help",
+	"std",
+	"suggestions",
+	"usage",
 ], version = "=4.5.20" }
-glib = { default-features = false, features = [
-  "log",
-], version = "=0.18.5" }
+glib = { default-features = false, features = ["log"], version = "=0.18.5" }
 gtk = { default-features = false, version = "=0.18.1" }
 gtk-layer-shell = { default-features = false, version = "=0.8.1" }
 indoc = { default-features = false, version = "=2.0.5" }
 nameof = { default-features = false, version = "=1.2.2" }
 nix = { default-features = false, features = [
-  "fs",
-  "process",
+	"fs",
+	"process",
 ], version = "=0.29.0" }
+serde = { default-features = false, features = [
+	"derive",
+], version = "=1.0.214" }
 serde_json = { default-features = false, features = [
-  "std",
+	"std",
 ], version = "=1.0.132" }
 tokio = { default-features = false, features = [
-  "io-std",
-  "io-util",
-  "macros",
-  "net",
-  "process",
-  "rt",
-  "signal",
-  "sync",
-  "time",
+	"io-std",
+	"io-util",
+	"macros",
+	"net",
+	"process",
+	"rt",
+	"signal",
+	"sync",
+	"time",
 ], version = "=1.41.0" }
 tokio-util = { default-features = false, version = "=0.7.12" }
 tracing = { default-features = false, version = "=0.1.40" }
 tracing-subscriber = { default-features = false, features = [
-  "fmt",
-  "std",
-  "tracing-log",
+	"fmt",
+	"std",
+	"tracing-log",
 ], version = "=0.3.18" }
 
 [package]
-authors = [
-  "Andrew Liebenow <andrewliebenow@gmail.com>",
-]
+authors = ["Andrew Liebenow <andrewliebenow@gmail.com>"]
 edition = "2021"
 license = "MIT"
 name = "vosd"
