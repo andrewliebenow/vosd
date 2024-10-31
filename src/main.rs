@@ -2,7 +2,7 @@ use clap::Parser;
 use gtk::{
     gdk::{self, Monitor, Screen},
     gio::ApplicationFlags,
-    glib::{self, SignalHandlerId, SourceId},
+    glib::{self, JoinHandle, SignalHandlerId, SourceId},
     prelude::{ApplicationExt, ApplicationExtManual, ImageExt, LabelExt},
     traits::{ContainerExt, CssProviderExt, GtkWindowExt, ProgressBarExt, StyleContextExt, WidgetExt},
     Align, Application, ApplicationWindow, CssProvider, IconSize, Image, Label, Orientation, ProgressBar, StyleContext,
@@ -41,10 +41,8 @@ const CSS_CSS_SLICE: &[u8] = include_bytes!("./css.css");
 
 const CRATE: &str = "vosd";
 const FIRST_LINE: &str = ">>>";
-const MUTED_ICON_NAME: &str = "audio-volume-muted-symbolic";
 const RETRY_DURATION: Duration = Duration::from_millis(10_u64);
 const SEPARATOR: &str = "================================================================================";
-const TIMEOUT_DURATION: Duration = Duration::from_secs(2_u64);
 
 /// Render an OSD when the volume level is changed
 #[derive(Parser)]
@@ -106,7 +104,7 @@ fn start() -> anyhow::Result<()> {
     if daemon {
         tracing::info!("Attempting to run as a daemon");
 
-        // Safety: TODO
+        // SAFETY: TODO
         let fork_result = unsafe { unistd::fork() }?;
 
         #[expect(clippy::absolute_paths, reason = "Conflicting imports")]
@@ -143,7 +141,7 @@ fn start() -> anyhow::Result<()> {
             anyhow::ensure!(unistd::dup(libc::STDIN_FILENO)? == libc::STDERR_FILENO);
         }
 
-        // Safety: TODO
+        // SAFETY: TODO
         let second_fork_result = unsafe { unistd::fork() }?;
 
         #[expect(clippy::absolute_paths, reason = "Conflicting imports")]
@@ -239,6 +237,8 @@ async fn start_inner(handle: &Handle) -> anyhow::Result<()> {
     let cancellation_token = CancellationToken::new();
 
     let cancellation_token_clone_a = cancellation_token.clone();
+    let cancellation_token_clone_b = cancellation_token.clone();
+    let cancellation_token_clone_c = cancellation_token.clone();
 
     let shutdown_join_handle = {
         let mut interrupt_signal = unix::signal(SignalKind::interrupt())?;
@@ -266,8 +266,6 @@ async fn start_inner(handle: &Handle) -> anyhow::Result<()> {
 
     let (pactl_data_unbounded_sender, pactl_data_unbounded_receiver) = mpsc::unbounded_channel::<PactlData>();
 
-    let cancellation_token_clone_b = cancellation_token_clone_a.clone();
-
     let error_handler_join_handle = handle.spawn(async move {
         let option = tokio::select! {
             op = error_unbounded_receiver.recv() => {
@@ -292,8 +290,6 @@ async fn start_inner(handle: &Handle) -> anyhow::Result<()> {
 
         cancellation_token_clone_a.cancel();
     });
-
-    let cancellation_token_clone_c = cancellation_token_clone_b.clone();
 
     let pactl_subscribe_join_handle = handle.spawn(async move {
         let result = process_pactl_subscribe_stdout(
@@ -411,9 +407,7 @@ fn gui_thread_function(
     // Explicitly keep the main loop running with an `ApplicationHoldGuard` so the application survives these short periods in which the window count is 0.
     let application_hold_guard = application.hold();
 
-    let cancellation_token_clone = cancellation_token.clone();
-
-    let _z = glib::spawn_future_local(async move {
+    let _z: JoinHandle<()> = glib::spawn_future_local(async move {
         loop {
             let option = tokio::select! {
                 op = pactl_data_unbounded_receiver.recv() => {
@@ -459,11 +453,6 @@ fn gui_thread_function(
     let exit_code = application_clone.run_with_args(&FOR_RUN_WITH_ARGS);
 
     tracing::info!("`run_with_args` returned (application has stopped)");
-
-    // TODO
-    // Hacky
-    // In case the application stopped on its own, stop the parent thread. Should not happen.
-    cancellation_token_clone.cancel();
 
     let exit_code_value = exit_code.value();
 
@@ -779,7 +768,7 @@ struct BalancedChannelsWidgets {
 }
 
 fn construct_balanced_channels_widgets(box_x: &gtk::Box) -> BalancedChannelsWidgets {
-    let image = create_image(MUTED_ICON_NAME);
+    let image = Image::from_icon_name(None, IconSize::Dnd);
     image.set_visible(true);
 
     box_x.add(&image);
@@ -832,9 +821,9 @@ fn show_volume_change_notification(
         ref timeout,
     } = *vosd_window;
 
+    /* #region Update widgets */
     let PactlData { base_volume, mute, volume, .. } = *pactl_data;
 
-    /* #region Add new widgets */
     if let Some(us) = volume {
         if *last_volume_change_notification_had_not_balanced_channels {
             application_window.hide();
@@ -855,13 +844,17 @@ fn show_volume_change_notification(
             }
         };
 
-        let icon_name = match (mute, volume_fraction) {
-            (true, _) => MUTED_ICON_NAME,
-            (false, fs) if fs == 0.0_f64 => MUTED_ICON_NAME,
-            (false, fs) if fs > 0.0_f64 && fs <= 0.333_f64 => "audio-volume-low-symbolic",
-            (false, fs) if fs > 0.333_f64 && fs <= 0.666_f64 => "audio-volume-medium-symbolic",
-            (false, fs) if fs > 0.666_f64 => "audio-volume-high-symbolic",
-            _ => anyhow::bail!("This should be unreachable"),
+        let icon_name = {
+            const MUTED_ICON_NAME: &str = "audio-volume-muted-symbolic";
+
+            match (mute, volume_fraction) {
+                (true, _) => MUTED_ICON_NAME,
+                (false, fs) if fs == 0.0_f64 => MUTED_ICON_NAME,
+                (false, fs) if fs > 0.0_f64 && fs <= 0.333_f64 => "audio-volume-low-symbolic",
+                (false, fs) if fs > 0.333_f64 && fs <= 0.666_f64 => "audio-volume-medium-symbolic",
+                (false, fs) if fs > 0.666_f64 => "audio-volume-high-symbolic",
+                _ => anyhow::bail!("Unreachable"),
+            }
         };
 
         image.set_icon_name(Some(icon_name));
@@ -919,6 +912,8 @@ fn show_volume_change_notification(
 
         *last_volume_change_notification_had_not_balanced_channels = true;
     }
+
+    application_window.set_visible(true);
     /* #endregion */
 
     /* #region Timeout logic */
@@ -927,7 +922,10 @@ fn show_volume_change_notification(
         so.remove();
     }
 
+    // Set new timeout
     {
+        const TIMEOUT_DURATION: Duration = Duration::from_secs(2_u64);
+
         let application_window_clone = application_window.clone();
 
         let timeout_clone = timeout.clone();
@@ -942,8 +940,6 @@ fn show_volume_change_notification(
         )));
     }
     /* #endregion */
-
-    application_window.set_visible(true);
 
     Ok(())
 }
